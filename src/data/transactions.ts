@@ -659,10 +659,14 @@ function buildTransaction(idx: number): Transaction {
   let vatStatus: VatStatus;
   let vatAmount: number | undefined;
   let vatRate: VatRate | undefined;
+  // Bias towards more needs-vat items so the "Needs VAT" filter + batch
+  // review flow has a meaningful pile to work through in the demo. The
+  // specific rates below were tuned so the inbox opens on ~30–40
+  // unreviewed needs-vat transactions across a typical seed.
   if (m.vatLikely === 'no') {
-    vatStatus = chance(0.75) ? 'not-applicable' : 'needs-vat';
+    vatStatus = chance(0.6) ? 'not-applicable' : 'needs-vat';
   } else if (m.vatLikely === 'yes') {
-    if (chance(0.35)) {
+    if (chance(0.6)) {
       vatStatus = 'needs-vat';
     } else {
       vatStatus = 'recorded';
@@ -671,8 +675,8 @@ function buildTransaction(idx: number): Transaction {
     }
   } else {
     const r = rand();
-    if (r < 0.4) vatStatus = 'needs-vat';
-    else if (r < 0.85) {
+    if (r < 0.65) vatStatus = 'needs-vat';
+    else if (r < 0.9) {
       vatStatus = 'recorded';
       vatRate = 20;
       vatAmount = calcVatFromGross(gross, 20);
