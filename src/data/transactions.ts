@@ -790,13 +790,60 @@ function applySeedRules(list: Transaction[]): Transaction[] {
   });
 }
 
-function generate(count: number): Transaction[] {
+/**
+ * Force a transaction into the current VAT quarter with vatStatus = 'needs-vat'.
+ * Used to top up the batch queue so the Reviewing VAT flow has a meaningful
+ * pile to step through in the demo, independent of the random distribution
+ * produced by buildTransaction.
+ */
+function buildForcedNeedsVatTransaction(idx: number): Transaction {
+  // Keep picking until we land on a VAT-eligible-category merchant. The
+  // MERCHANTS list has plenty of them, so this rejects at most a couple
+  // of times per call.
+  let m = weightedMerchant();
+  while (!VAT_ELIGIBLE_CATEGORIES.includes(m.category)) {
+    m = weightedMerchant();
+  }
+
+  const gross = range(m.min, m.max);
+  const amount = -gross;
+  // Current VAT quarter opened on 2026-04-01; today is 2026-04-18, so
+  // spread across the last 0–17 days to keep everything in-quarter.
+  const daysAgo = Math.floor(rand() * 18);
+  const description = pick(m.descriptions);
+  const receiptRequired = gross > 10;
+  const receiptAttached = receiptRequired ? chance(0.45) : chance(0.15);
+
+  return {
+    id: `txn_${idx.toString().padStart(4, '0')}`,
+    date: isoDate(daysAgo),
+    merchant: m.name,
+    description,
+    amount: Math.round(amount * 100) / 100,
+    currency: 'GBP',
+    category: m.category,
+    categoryConfidence: chance(0.15) ? 'medium' : 'high',
+    categorySource: 'ai',
+    vatStatus: 'needs-vat',
+    receiptAttached,
+    receiptRequired,
+    receiptFilename: receiptAttached ? `receipt-${idx}.pdf` : undefined,
+    isPersonal: false,
+    reviewed: false,
+    account: accountFor(m),
+  };
+}
+
+function generate(count: number, extraNeedsVat: number): Transaction[] {
   const list: Transaction[] = [];
   for (let i = 0; i < count; i++) list.push(buildTransaction(i));
+  for (let j = 0; j < extraNeedsVat; j++) {
+    list.push(buildForcedNeedsVatTransaction(count + j));
+  }
   return applySeedRules(list);
 }
 
-export const transactions: Transaction[] = generate(300);
+export const transactions: Transaction[] = generate(300, 40);
 
 if (typeof window !== 'undefined') {
   (window as unknown as { __anna?: unknown }).__anna = {
