@@ -80,10 +80,12 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
       {txn.vatStatus === 'not-applicable' && !editing && (
         <NotApplicableView
           txn={txn}
+          variant={variant}
           onToggleEligible={() => {
             removeVat(txn.id);
             setEditing(true);
           }}
+          onSaveAndNext={onSaved}
         />
       )}
 
@@ -214,20 +216,42 @@ function RecordedView({
 
 function NotApplicableView({
   txn: _txn,
+  variant,
   onToggleEligible,
+  onSaveAndNext,
 }: {
   txn: Transaction;
+  variant: 'inline' | 'expanded';
   /** Flip back to VAT-eligible: clears the not-applicable status and
       drops into the entry form so the user can add VAT. */
   onToggleEligible: () => void;
+  /** Batch mode only: commits this (already-saved) not-applicable state
+      as the user's answer and moves to the next transaction. The status
+      is persisted the moment the toggle flipped, so the CTA is really a
+      "move on" — but the label reads as Save so the rhythm with the
+      Save VAT amount button in the entry view is consistent. */
+  onSaveAndNext?: () => void;
 }) {
+  const showSaveCta = variant === 'expanded' && Boolean(onSaveAndNext);
   return (
-    <div className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted px-3.5 py-3">
+    <div className="space-y-2.5 rounded-lg border border-ink-100 bg-paper-muted px-3.5 py-3">
       <div className="flex items-center gap-2 text-[12.5px] text-ink-500">
         <CircleDot className="h-3.5 w-3.5 text-ink-300" aria-hidden="true" />
         Not VAT-eligible
       </div>
       <NotEligibleToggle checked onChange={() => onToggleEligible()} />
+      {showSaveCta && (
+        <div className="flex justify-end border-t border-ink-100 pt-2.5">
+          <button
+            type="button"
+            onClick={onSaveAndNext}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2"
+          >
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            Save and next
+          </button>
+        </div>
+      )}
     </div>
   );
 }
