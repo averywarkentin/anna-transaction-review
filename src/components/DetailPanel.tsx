@@ -21,6 +21,7 @@ import {
 import { CategoryBlock } from './CategoryBlock';
 import { VatEntryBlock } from './VatEntryBlock';
 import { AuditTrailPopover } from './AuditTrailPopover';
+import { RecentlyReviewedPopover } from './RecentlyReviewedPopover';
 import { ReceiptLightbox } from './ReceiptLightbox';
 import { ReceiptRequiredModal } from './ReceiptRequiredModal';
 import type { Transaction } from '../types';
@@ -127,6 +128,8 @@ export function DetailPanel() {
         accountFilter: state.accountFilter,
         personalTaxYear: state.personalTaxYear,
         currentView: state.currentView,
+        categoryFilter: state.categoryFilter,
+        searchQuery: state.searchQuery,
       });
 
       if (fresh.length === 0) {
@@ -315,7 +318,10 @@ function DetailHeader({ txn }: { txn: Transaction }) {
         <p className="min-w-0 flex-1 truncate text-[13px] text-ink-500">
           {txn.description || '\u00A0'}
         </p>
-        <AuditTrailPopover txn={txn} />
+        <div className="flex shrink-0 items-center gap-2">
+          <RecentlyReviewedPopover source="detail" />
+          <AuditTrailPopover txn={txn} />
+        </div>
       </div>
     </div>
   );

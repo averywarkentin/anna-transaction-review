@@ -3,6 +3,7 @@ import { taxYearRange, useStore } from '../store';
 import { applyFilters, defaultSort } from '../lib/filters';
 import type {
   AccountFilter,
+  Category,
   DateRangeKey,
   FilterKey,
   TaxYearKey,
@@ -23,6 +24,8 @@ type VisibleInputs = {
   accountFilter: AccountFilter;
   personalTaxYear: TaxYearKey;
   currentView: 'to-review' | 'all-transactions';
+  categoryFilter?: ReadonlySet<Category>;
+  searchQuery?: string;
 };
 
 /**
@@ -40,6 +43,8 @@ export function computeVisibleTransactions(
     customDateRange: s.customDateRange,
     account: s.accountFilter,
     excludeReviewed: s.currentView === 'to-review',
+    categoryFilter: s.categoryFilter,
+    searchQuery: s.searchQuery,
   });
   if (s.activeFilters.has('personal')) {
     const { start, end } = taxYearRange(s.personalTaxYear);
@@ -61,6 +66,8 @@ export function useVisibleTransactions(): Transaction[] {
   const accountFilter = useStore((s) => s.accountFilter);
   const personalTaxYear = useStore((s) => s.personalTaxYear);
   const currentView = useStore((s) => s.currentView);
+  const categoryFilter = useStore((s) => s.categoryFilter);
+  const searchQuery = useStore((s) => s.searchQuery);
 
   return useMemo(
     () =>
@@ -72,6 +79,8 @@ export function useVisibleTransactions(): Transaction[] {
         accountFilter,
         personalTaxYear,
         currentView,
+        categoryFilter,
+        searchQuery,
       }),
     [
       transactions,
@@ -81,6 +90,8 @@ export function useVisibleTransactions(): Transaction[] {
       accountFilter,
       personalTaxYear,
       currentView,
+      categoryFilter,
+      searchQuery,
     ],
   );
 }

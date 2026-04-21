@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  HelpCircle,
   Inbox,
   List as ListIcon,
   Search,
@@ -80,10 +81,14 @@ export function TransactionList() {
   // showing the green check + "See all transactions" would be
   // misleading. With filters active we fall back to the generic
   // "Nothing matches" copy.
+  const categoryFilter = useStore((s) => s.categoryFilter);
+  const searchQuery = useStore((s) => s.searchQuery);
   const hasNarrowingFilter =
     activeFilters.size > 0 ||
     dateRange !== 'all' ||
-    accountFilter !== 'all';
+    accountFilter !== 'all' ||
+    categoryFilter.size > 0 ||
+    searchQuery.trim().length > 0;
 
   const visible = useVisibleTransactions();
 
@@ -442,13 +447,60 @@ function ListTopBar({
   listView: ListView;
   onChangeView: (v: ListView) => void;
 }) {
+  const searchQuery = useStore((s) => s.searchQuery);
+  const setSearchQuery = useStore((s) => s.setSearchQuery);
+
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-ink-100 bg-paper px-4 py-2 sm:px-6">
-      <span className="text-[12px] font-medium text-ink-500">
-        {total} transaction{total === 1 ? '' : 's'}
-      </span>
+    <div className="flex flex-col gap-2 border-b border-ink-100 bg-paper px-4 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-6">
+      <div className="flex items-center justify-between gap-3 sm:flex-1">
+        <span className="shrink-0 text-[12px] font-medium text-ink-500">
+          {total} transaction{total === 1 ? '' : 's'}
+        </span>
+        <ListSearchBar value={searchQuery} onChange={setSearchQuery} />
+      </div>
       <ViewToggle value={listView} onChange={onChangeView} />
     </div>
+  );
+}
+
+/**
+ * Free-text search over the visible list. Stacks with the chip filters
+ * and secondary dropdowns — it narrows whatever the user has already
+ * chosen rather than replacing it. Debouncing is left to the store;
+ * the set is already O(n) over a ledger, so every keystroke is fine.
+ */
+function ListSearchBar({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="relative flex min-w-0 flex-1 items-center sm:max-w-[360px]">
+      <Search
+        className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-ink-400"
+        aria-hidden="true"
+      />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search merchant, description, amount"
+        aria-label="Search transactions"
+        className="w-full rounded-md border border-ink-100 bg-paper py-1.5 pl-8 pr-7 text-[13px] text-ink-800 placeholder:text-ink-400 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-ring"
+      />
+      {value.length > 0 && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          aria-label="Clear search"
+          className="absolute right-1.5 grid h-5 w-5 place-items-center rounded text-ink-400 hover:bg-ink-50 hover:text-ink-700"
+        >
+          <X className="h-3 w-3" aria-hidden="true" />
+        </button>
+      )}
+    </label>
   );
 }
 
@@ -484,9 +536,100 @@ function ListHeader({
       </div>
       <div />
       <div>{groupedMode ? '' : 'Date'}</div>
-      <div>Category</div>
+      <div className="flex items-center gap-1">
+        <span>Category</span>
+        <ConfidenceLegend />
+      </div>
       <div>Flags</div>
       <div className="text-right">Amount</div>
+    </div>
+  );
+}
+
+/**
+ * Tiny hover/click popover that explains what the green / amber dots
+ * next to each category mean. Positioned inline with the Category column
+ * header so the legend is discoverable where users actually see the
+ * dots. Keyboard-accessible, Esc-dismiss, outside-click-dismiss.
+ */
+function ConfidenceLegend() {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        btnRef.current?.focus();
+      }
+    }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onFocus={() => setOpen(true)}
+        aria-label="Category confidence legend"
+        aria-expanded={open}
+        className="-m-1 grid h-6 w-6 place-items-center rounded-full text-ink-400 hover:bg-ink-100 hover:text-ink-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
+      >
+        <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          ref={popRef}
+          role="tooltip"
+          className="absolute left-0 top-full z-30 mt-1 w-[260px] rounded-lg border border-ink-100 bg-paper p-3 text-[12.5px] normal-case tracking-normal text-ink-700 shadow-panel"
+        >
+          <p className="mb-2 text-[11.5px] font-semibold uppercase tracking-wide text-ink-400">
+            Category confidence
+          </p>
+          <ul className="space-y-1.5">
+            <li className="flex items-start gap-2">
+              <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+              <span>
+                <span className="font-medium text-ink-800">High.</span>{' '}
+                Set by a rule or confirmed by you.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+              <span>
+                <span className="font-medium text-ink-800">Medium.</span>{' '}
+                AI's best guess. Probably right, worth a glance.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1 inline-block h-2 w-2 shrink-0 animate-pulse-soft rounded-full bg-amber-500" aria-hidden="true" />
+              <span>
+                <span className="font-medium text-ink-800">Low.</span>{' '}
+                AI isn't sure — please pick one.
+              </span>
+            </li>
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

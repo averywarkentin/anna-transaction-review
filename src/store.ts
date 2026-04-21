@@ -27,8 +27,40 @@ export type BatchState = {
   ids: string[];
   currentIndex: number;
   completedIds: Set<string>;
+  /**
+   * Ids the user deliberately skipped this batch. Tracked separately from
+   * `completedIds` so the sidebar can render a distinct dashed-outline
+   * marker and so we never auto-return to them on advance.
+   */
+  skippedIds: Set<string>;
+  /**
+   * Progress milestones (25, 50, 75) already shown this batch. Used to
+   * ensure each calm milestone banner fires exactly once per session.
+   */
+  milestonesShown: Set<number>;
+  /**
+   * The most recent milestone triggered, for the inline banner to render
+   * and auto-dismiss. Cleared by the banner after its dwell window.
+   */
+  activeMilestone: number | null;
   vatAddedTotal: number;
   vatAddedCount: number;
+};
+
+/** An entry in the session-scoped "Recently reviewed" list. */
+export type ReviewedSessionEntry = {
+  id: string;
+  at: number;
+};
+
+/**
+ * Ephemeral highlight entry for a just-recategorised row. The soft green
+ * dwell lasts ~1.2s, then fades out over ~400ms before the entry is
+ * cleared from state.
+ */
+export type RecentlyChangedEntry = {
+  id: string;
+  at: number;
 };
 
 export type YearEndDecision = 'personal' | 'business' | 'skip';
@@ -162,6 +194,17 @@ type Store = {
   rules: MerchantRule[];
 
   activeFilters: Set<FilterKey>;
+  /**
+   * Secondary category-narrowing filter. Stacks with the primary chip
+   * filters — so "Needs VAT" + {Travel, Meals} means "needs-VAT rows in
+   * those two categories". Empty set = not narrowed.
+   */
+  categoryFilter: Set<Category>;
+  /**
+   * Free-text query matched against merchant, description, category and
+   * amount. Trim-and-lowercase comparison; empty = no filter.
+   */
+  searchQuery: string;
   dateRange: DateRangeKey;
   /**
    * Inclusive start/end for the custom date range picker. Only consulted
@@ -208,7 +251,25 @@ type Store = {
 
   yearEnd: YearEndState;
 
+  /**
+   * Session-scoped list of transactions the user has marked reviewed
+   * during this browser session (newest first, capped at a small limit).
+   * Powers the "Recently reviewed" popover in the detail header and
+   * batch header. Cleared on reload.
+   */
+  reviewedSession: ReviewedSessionEntry[];
+  /**
+   * Ephemeral post-recategorisation highlights. Rows render a soft green
+   * tint for ~1.2s dwell then fade over ~400ms before the entry is
+   * cleared. Keyed on txn id + timestamp so a rapid re-change refreshes
+   * the pulse.
+   */
+  recentlyChangedIds: RecentlyChangedEntry[];
+
   toggleFilter: (f: FilterKey) => void;
+  toggleCategoryFilter: (c: Category) => void;
+  clearCategoryFilter: () => void;
+  setSearchQuery: (q: string) => void;
   clearFilters: () => void;
   setDateRange: (d: DateRangeKey) => void;
   /** Update the custom start/end (also forces dateRange to 'custom'). */
@@ -304,7 +365,15 @@ type Store = {
   startBatch: (ids: string[]) => void;
   exitBatch: () => void;
   advanceBatch: () => void;
+  /**
+   * Deliberately skip the current batch item. Marks its id in
+   * `skippedIds` so the sidebar renders a distinct dashed-outline marker,
+   * and advances to the next unfinished item.
+   */
+  skipCurrentBatch: () => void;
   jumpBatchTo: (index: number) => void;
+  /** Clear the just-triggered milestone so the banner dismisses. */
+  dismissBatchMilestone: () => void;
 
   openReceiptModal: (
     txnId: string,
@@ -405,6 +474,9 @@ type Store = {
    * clears automatically if a receipt is attached later).
    */
   markReviewedWithoutReceipt: (ids: string[]) => void;
+
+  /** Clear the "recently changed" pulse for a given txn id. */
+  clearRecentlyChanged: (id: string) => void;
 };
 
 const emptyBatch: BatchState = {
@@ -412,9 +484,52 @@ const emptyBatch: BatchState = {
   ids: [],
   currentIndex: 0,
   completedIds: new Set<string>(),
+  skippedIds: new Set<string>(),
+  milestonesShown: new Set<number>(),
+  activeMilestone: null,
   vatAddedTotal: 0,
   vatAddedCount: 0,
 };
+
+/** Maximum entries in the session-scoped reviewed list. */
+const REVIEWED_SESSION_CAP = 10;
+
+/**
+ * Prepend entries for `ids` to the session list, newest first, dedup'd
+ * against the existing list, capped.
+ */
+function pushReviewedSession(
+  current: ReviewedSessionEntry[],
+  ids: string[],
+): ReviewedSessionEntry[] {
+  if (ids.length === 0) return current;
+  const now = Date.now();
+  const seen = new Set(ids);
+  const remainder = current.filter((e) => !seen.has(e.id));
+  const fresh = ids.map((id) => ({ id, at: now }));
+  return [...fresh, ...remainder].slice(0, REVIEWED_SESSION_CAP);
+}
+
+/**
+ * Detect the first milestone (25/50/75) crossed by `nextDone` given the
+ * previous completion count and total, excluding milestones already
+ * shown this batch. Returns null if no new crossing.
+ */
+function nextMilestone(
+  prevDone: number,
+  nextDone: number,
+  total: number,
+  shown: ReadonlySet<number>,
+): number | null {
+  if (total === 0) return null;
+  const prevPct = (prevDone / total) * 100;
+  const nextPct = (nextDone / total) * 100;
+  for (const m of [25, 50, 75]) {
+    if (shown.has(m)) continue;
+    if (prevPct < m && nextPct >= m && nextPct < 100) return m;
+  }
+  return null;
+}
 
 const emptyYearEnd: YearEndState = {
   active: false,
@@ -540,6 +655,8 @@ export const useStore = create<Store>((set, get) => ({
   rules: INITIAL_RULES,
 
   activeFilters: new Set<FilterKey>(),
+  categoryFilter: new Set<Category>(),
+  searchQuery: '',
   dateRange: 'all',
   customDateRange: null,
   accountFilter: 'all',
@@ -570,6 +687,9 @@ export const useStore = create<Store>((set, get) => ({
   personalTaxYear: 'previous',
   yearEnd: emptyYearEnd,
 
+  reviewedSession: [],
+  recentlyChangedIds: [],
+
   toggleFilter: (f) =>
     set((s) => {
       const next = new Set(s.activeFilters);
@@ -578,9 +698,24 @@ export const useStore = create<Store>((set, get) => ({
       return { activeFilters: next };
     }),
 
+  toggleCategoryFilter: (c) =>
+    set((s) => {
+      const next = new Set(s.categoryFilter);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return { categoryFilter: next };
+    }),
+
+  clearCategoryFilter: () =>
+    set(() => ({ categoryFilter: new Set<Category>() })),
+
+  setSearchQuery: (q) => set(() => ({ searchQuery: q })),
+
   clearFilters: () =>
     set(() => ({
       activeFilters: new Set<FilterKey>(),
+      categoryFilter: new Set<Category>(),
+      searchQuery: '',
       dateRange: 'all' as DateRangeKey,
       customDateRange: null,
       accountFilter: 'all' as AccountFilter,
@@ -685,19 +820,42 @@ export const useStore = create<Store>((set, get) => ({
   saveVat: (id, { rate, amount, method }) =>
     set((s) => {
       const clean = Math.max(0, Math.round(amount * 100) / 100);
-      const nextBatch =
-        s.batch.active && s.batch.ids.includes(id)
-          ? {
-              ...s.batch,
-              completedIds: new Set([...s.batch.completedIds, id]),
-              vatAddedCount: s.batch.completedIds.has(id)
-                ? s.batch.vatAddedCount
-                : s.batch.vatAddedCount + 1,
-              vatAddedTotal: s.batch.completedIds.has(id)
-                ? s.batch.vatAddedTotal
-                : s.batch.vatAddedTotal + clean,
-            }
-          : s.batch;
+      let nextBatch = s.batch;
+      if (s.batch.active && s.batch.ids.includes(id)) {
+        const wasDone = s.batch.completedIds.has(id);
+        const prevDone = s.batch.completedIds.size;
+        const completedIds = new Set([...s.batch.completedIds, id]);
+        const nextDone = completedIds.size;
+        // Un-skip if this item had been skipped earlier — recording VAT
+        // supersedes the skip state.
+        const skippedIds = new Set(s.batch.skippedIds);
+        skippedIds.delete(id);
+        // Pick the first as-yet-unshown milestone the newly-completed
+        // count crosses. 100% is intentionally excluded: the completion
+        // screen already fills that role.
+        const milestone = nextMilestone(
+          prevDone,
+          nextDone,
+          s.batch.ids.length,
+          s.batch.milestonesShown,
+        );
+        const milestonesShown = milestone
+          ? new Set([...s.batch.milestonesShown, milestone])
+          : s.batch.milestonesShown;
+        nextBatch = {
+          ...s.batch,
+          completedIds,
+          skippedIds,
+          milestonesShown,
+          activeMilestone: milestone ?? s.batch.activeMilestone,
+          vatAddedCount: wasDone
+            ? s.batch.vatAddedCount
+            : s.batch.vatAddedCount + 1,
+          vatAddedTotal: wasDone
+            ? s.batch.vatAddedTotal
+            : s.batch.vatAddedTotal + clean,
+        };
+      }
       return {
         transactions: updateTxn(s.transactions, id, {
           vatStatus: 'recorded',
@@ -723,13 +881,30 @@ export const useStore = create<Store>((set, get) => ({
 
   markNotVatEligible: (id) =>
     set((s) => {
-      const nextBatch =
-        s.batch.active && s.batch.ids.includes(id)
-          ? {
-              ...s.batch,
-              completedIds: new Set([...s.batch.completedIds, id]),
-            }
-          : s.batch;
+      let nextBatch = s.batch;
+      if (s.batch.active && s.batch.ids.includes(id)) {
+        const prevDone = s.batch.completedIds.size;
+        const completedIds = new Set([...s.batch.completedIds, id]);
+        const nextDone = completedIds.size;
+        const skippedIds = new Set(s.batch.skippedIds);
+        skippedIds.delete(id);
+        const milestone = nextMilestone(
+          prevDone,
+          nextDone,
+          s.batch.ids.length,
+          s.batch.milestonesShown,
+        );
+        const milestonesShown = milestone
+          ? new Set([...s.batch.milestonesShown, milestone])
+          : s.batch.milestonesShown;
+        nextBatch = {
+          ...s.batch,
+          completedIds,
+          skippedIds,
+          milestonesShown,
+          activeMilestone: milestone ?? s.batch.activeMilestone,
+        };
+      }
       return {
         transactions: updateTxn(s.transactions, id, {
           vatStatus: 'not-applicable',
@@ -814,6 +989,9 @@ export const useStore = create<Store>((set, get) => ({
         ids,
         currentIndex: 0,
         completedIds: new Set<string>(),
+        skippedIds: new Set<string>(),
+        milestonesShown: new Set<number>(),
+        activeMilestone: null,
         vatAddedCount: 0,
         vatAddedTotal: 0,
       },
@@ -827,6 +1005,8 @@ export const useStore = create<Store>((set, get) => ({
     set((s) => {
       if (!s.batch.active) return {};
       let i = s.batch.currentIndex + 1;
+      // Skip anything already completed; skipped items are still walkable
+      // (the user may want to revisit), so we only skip past completions.
       while (
         i < s.batch.ids.length &&
         s.batch.completedIds.has(s.batch.ids[i]!)
@@ -841,6 +1021,39 @@ export const useStore = create<Store>((set, get) => ({
         selectedId: nextId ?? s.selectedId,
       };
     }),
+
+  skipCurrentBatch: () =>
+    set((s) => {
+      if (!s.batch.active) return {};
+      const currentId = s.batch.ids[s.batch.currentIndex];
+      // Walk forward past completed items. Skipped items are left
+      // walkable so the user can revisit; the sidebar marks them
+      // with a distinct dashed-outline chip.
+      let i = s.batch.currentIndex + 1;
+      while (
+        i < s.batch.ids.length &&
+        s.batch.completedIds.has(s.batch.ids[i]!)
+      ) {
+        i++;
+      }
+      const nextIndex = Math.min(i, s.batch.ids.length);
+      const nextId =
+        nextIndex < s.batch.ids.length ? s.batch.ids[nextIndex]! : null;
+      const skippedIds = currentId
+        ? new Set([...s.batch.skippedIds, currentId])
+        : s.batch.skippedIds;
+      return {
+        batch: { ...s.batch, currentIndex: nextIndex, skippedIds },
+        selectedId: nextId ?? s.selectedId,
+      };
+    }),
+
+  dismissBatchMilestone: () =>
+    set((s) =>
+      s.batch.active
+        ? { batch: { ...s.batch, activeMilestone: null } }
+        : {},
+    ),
 
   jumpBatchTo: (index) =>
     set((s) => {
@@ -890,8 +1103,19 @@ export const useStore = create<Store>((set, get) => ({
           aiReasoning: undefined,
           categoryHistory: [...(t.categoryHistory ?? []), entry],
         }),
+        // Soft green dwell on the row for ~1.2s + fade. Entry cleared by
+        // a setTimeout in the consumer component once the animation ends.
+        recentlyChangedIds: [
+          { id, at: Date.now() },
+          ...s.recentlyChangedIds.filter((e) => e.id !== id),
+        ],
       };
     }),
+
+  clearRecentlyChanged: (id) =>
+    set((s) => ({
+      recentlyChangedIds: s.recentlyChangedIds.filter((e) => e.id !== id),
+    })),
 
   applyToPastForMerchant: ({
     pivotId,
@@ -1211,34 +1435,47 @@ export const useStore = create<Store>((set, get) => ({
       if (!t) return {};
       const next = reviewed ?? !t.reviewed;
       if (t.reviewed === next) return {};
-      return { transactions: updateTxn(s.transactions, id, { reviewed: next }) };
+      return {
+        transactions: updateTxn(s.transactions, id, { reviewed: next }),
+        // Push on transition to reviewed=true only. Un-reviewing is a
+        // correction, not a new review event.
+        reviewedSession: next
+          ? pushReviewedSession(s.reviewedSession, [id])
+          : s.reviewedSession,
+      };
     }),
 
   bulkSetReviewed: (ids, reviewed) =>
     set((s) => {
       const targetIds = new Set(ids);
-      const changed = s.transactions.map((t) =>
-        targetIds.has(t.id) && t.reviewed !== reviewed
-          ? { ...t, reviewed }
-          : t,
-      );
+      const newlyReviewed: string[] = [];
+      const changed = s.transactions.map((t) => {
+        if (!targetIds.has(t.id) || t.reviewed === reviewed) return t;
+        if (reviewed) newlyReviewed.push(t.id);
+        return { ...t, reviewed };
+      });
       return {
         transactions: changed,
         checkedIds: new Set<string>(),
+        reviewedSession: reviewed
+          ? pushReviewedSession(s.reviewedSession, newlyReviewed)
+          : s.reviewedSession,
       };
     }),
 
   markReviewedWithoutReceipt: (ids) =>
     set((s) => {
       const targetIds = new Set(ids);
-      const changed = s.transactions.map((t) =>
-        targetIds.has(t.id)
-          ? { ...t, reviewed: true, reviewedWithoutReceipt: true }
-          : t,
-      );
+      const newlyReviewed: string[] = [];
+      const changed = s.transactions.map((t) => {
+        if (!targetIds.has(t.id)) return t;
+        if (!t.reviewed) newlyReviewed.push(t.id);
+        return { ...t, reviewed: true, reviewedWithoutReceipt: true };
+      });
       return {
         transactions: changed,
         checkedIds: new Set<string>(),
+        reviewedSession: pushReviewedSession(s.reviewedSession, newlyReviewed),
       };
     }),
 

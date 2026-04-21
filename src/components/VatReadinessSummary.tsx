@@ -8,25 +8,27 @@ const TODAY = new Date('2026-04-18T12:00:00Z');
 
 export function VatReadinessSummary() {
   const transactions = useStore((s) => s.transactions);
-  const toggleFilter = useStore((s) => s.toggleFilter);
-  const activeFilters = useStore((s) => s.activeFilters);
-  const currentView = useStore((s) => s.currentView);
-  const setCurrentView = useStore((s) => s.setCurrentView);
+  const startBatch = useStore((s) => s.startBatch);
 
-  const { ready, total, needsVat, daysToEnd } = useMemo(() => {
+  const { ready, total, needsVat, needsVatIds, daysToEnd } = useMemo(() => {
     // "Eligible" = VAT-eligible category, debit, current VAT quarter.
     // The "Needs VAT" chip filter uses the exact same scope, so the
     // chip count and "N transactions still need VAT" always match.
     const eligible = transactions.filter(isInVatReturnScope);
     const ready = eligible.filter((t) => t.vatStatus === 'recorded').length;
-    const needsVat = eligible.filter((t) => t.vatStatus === 'needs-vat').length;
+    const needsVatList = eligible.filter((t) => t.vatStatus === 'needs-vat');
+    const needsVat = needsVatList.length;
+    const needsVatIds = needsVatList
+      .slice()
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+      .map((t) => t.id);
     const total = ready + needsVat;
     const { end } = currentVatQuarterBounds();
     const daysToEnd = Math.max(
       0,
       Math.ceil((end.getTime() - TODAY.getTime()) / 86_400_000),
     );
-    return { ready, total, needsVat, daysToEnd };
+    return { ready, total, needsVat, needsVatIds, daysToEnd };
   }, [transactions]);
 
   // ready % = recorded / (recorded + needs-vat) × 100. "Not applicable" is
@@ -65,13 +67,20 @@ export function VatReadinessSummary() {
         <button
           type="button"
           onClick={() => {
-            // Jump from "All transactions" into the to-review inbox so
-            // the Needs VAT filter has something to narrow — applying it
-            // while the ledger shows reviewed rows too is confusing.
-            if (currentView !== 'to-review') setCurrentView('to-review');
-            if (!activeFilters.has('needs-vat')) toggleFilter('needs-vat');
+            // Drop straight into the Reviewing VAT batch flow so a
+            // single click takes the user from "12% ready" to the first
+            // transaction that still needs a number on it. No batch
+            // starts if nothing is outstanding.
+            if (needsVatIds.length === 0) return;
+            startBatch(needsVatIds);
           }}
-          className="truncate text-left text-[11.5px] text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline"
+          disabled={needsVat === 0}
+          aria-label={
+            needsVat === 0
+              ? 'No transactions still need VAT'
+              : `Review ${needsVat} transaction${needsVat === 1 ? '' : 's'} still needing VAT`
+          }
+          className="truncate text-left text-[11.5px] text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline disabled:cursor-default disabled:no-underline disabled:hover:text-ink-500"
         >
           <AnimatedNumber value={needsVat} /> transaction
           {needsVat === 1 ? '' : 's'} still need VAT

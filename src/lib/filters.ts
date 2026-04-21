@@ -1,5 +1,6 @@
 import type {
   AccountFilter,
+  Category,
   DateRangeKey,
   FilterKey,
   Transaction,
@@ -114,6 +115,23 @@ export function matchesFilter(txn: Transaction, key: FilterKey): boolean {
   }
 }
 
+/**
+ * Case-insensitive free-text match against merchant, description,
+ * category, or amount digits. Amount match is intentionally loose:
+ * typing "42" matches £42.00, £142.50, etc.
+ */
+function matchesQuery(t: Transaction, q: string): boolean {
+  if (!q) return true;
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  if (t.merchant.toLowerCase().includes(needle)) return true;
+  if ((t.description ?? '').toLowerCase().includes(needle)) return true;
+  if (t.category.toLowerCase().includes(needle)) return true;
+  const absStr = Math.abs(t.amount).toFixed(2);
+  if (absStr.includes(needle.replace(/[£,\s]/g, ''))) return true;
+  return false;
+}
+
 export function applyFilters(
   transactions: Transaction[],
   opts: {
@@ -124,6 +142,10 @@ export function applyFilters(
     account: AccountFilter;
     /** If true, hide reviewed transactions (the "To review" view). */
     excludeReviewed?: boolean;
+    /** Secondary category narrowing. Empty/undefined = no narrow. */
+    categoryFilter?: ReadonlySet<Category>;
+    /** Free-text search; trimmed, case-insensitive. */
+    searchQuery?: string;
   },
 ): Transaction[] {
   return transactions.filter((t) => {
@@ -131,6 +153,10 @@ export function applyFilters(
     if (opts.account !== 'all' && t.account !== opts.account) return false;
     if (!withinDateRange(t.date, opts.dateRange, opts.customDateRange))
       return false;
+    if (opts.categoryFilter && opts.categoryFilter.size > 0 &&
+      !opts.categoryFilter.has(t.category))
+      return false;
+    if (opts.searchQuery && !matchesQuery(t, opts.searchQuery)) return false;
     for (const f of opts.filters) {
       if (!matchesFilter(t, f)) return false;
     }

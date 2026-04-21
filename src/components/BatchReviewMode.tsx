@@ -5,6 +5,7 @@ import {
   ChevronUp,
   CircleDashed,
   Keyboard,
+  Sparkles,
   SkipForward,
   X,
 } from 'lucide-react';
@@ -12,6 +13,7 @@ import { useStore } from '../store';
 import { formatAmount, formatDateLong, formatDateShort } from '../lib/format';
 import { ConfidenceDot } from './ConfidenceDot';
 import { VatEntryBlock } from './VatEntryBlock';
+import { RecentlyReviewedPopover } from './RecentlyReviewedPopover';
 import type { Transaction } from '../types';
 
 export function BatchReviewMode() {
@@ -19,6 +21,7 @@ export function BatchReviewMode() {
   const transactions = useStore((s) => s.transactions);
   const exitBatch = useStore((s) => s.exitBatch);
   const advanceBatch = useStore((s) => s.advanceBatch);
+  const skipCurrentBatch = useStore((s) => s.skipCurrentBatch);
   const markNotVatEligible = useStore((s) => s.markNotVatEligible);
   const openReceiptModal = useStore((s) => s.openReceiptModal);
   const toggleFilter = useStore((s) => s.toggleFilter);
@@ -59,7 +62,11 @@ export function BatchReviewMode() {
       if (inInput && e.key !== 'Escape' && !batchShortcut) return;
       if (key === 's') {
         e.preventDefault();
-        advanceBatch();
+        // Blur any active input so the virtual keyboard dismisses on
+        // mobile before the next txn loads — previously this left focus
+        // on the same amount input, making Skip feel like a no-op.
+        if (active instanceof HTMLElement) active.blur();
+        skipCurrentBatch();
       } else if (key === 'u' && currentId) {
         e.preventDefault();
         openReceiptModal(currentId, 'batch');
@@ -77,6 +84,7 @@ export function BatchReviewMode() {
     currentId,
     exitBatch,
     advanceBatch,
+    skipCurrentBatch,
     markNotVatEligible,
     openReceiptModal,
     receiptModalOpen,
@@ -118,6 +126,17 @@ function BatchHeader() {
   const pct = total === 0 ? 0 : Math.round((completed / total) * 100);
   const displayIndex = Math.min(batch.currentIndex + 1, total);
 
+  // Brief pulse on the progress bar when a milestone fires. The
+  // milestone state drives both this pulse and the inline banner, so
+  // they animate in sync. Cleared after 450ms.
+  const [pulse, setPulse] = useState(false);
+  useEffect(() => {
+    if (batch.activeMilestone == null) return;
+    setPulse(true);
+    const t = window.setTimeout(() => setPulse(false), 450);
+    return () => window.clearTimeout(t);
+  }, [batch.activeMilestone]);
+
   return (
     <header className="z-30 flex h-14 shrink-0 items-center border-b border-ink-100 bg-paper px-4 sm:h-16 sm:px-6">
       <div className="flex min-w-0 items-center gap-2 sm:min-w-[260px]">
@@ -153,6 +172,9 @@ function BatchHeader() {
       </div>
 
       <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:min-w-[260px] sm:gap-3">
+        <div className="hidden sm:block">
+          <RecentlyReviewedPopover source="batch" />
+        </div>
         <div className="hidden flex-col items-end leading-tight sm:flex">
           <span className="tabular text-[12px] font-medium text-ink-700">
             {completed} of {total} done
@@ -160,7 +182,9 @@ function BatchHeader() {
           <span className="tabular text-[11px] text-ink-400">{pct}%</span>
         </div>
         <div
-          className="h-1.5 w-24 overflow-hidden rounded-full bg-ink-100 sm:w-40"
+          className={`h-1.5 w-24 overflow-hidden rounded-full bg-ink-100 transition sm:w-40 ${
+            pulse ? 'ring-2 ring-accent/40 ring-offset-1 ring-offset-paper' : ''
+          }`}
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={total}
@@ -174,6 +198,47 @@ function BatchHeader() {
         </div>
       </div>
     </header>
+  );
+}
+
+function MilestoneBanner() {
+  const activeMilestone = useStore((s) => s.batch.activeMilestone);
+  const dismissBatchMilestone = useStore((s) => s.dismissBatchMilestone);
+
+  useEffect(() => {
+    if (activeMilestone == null) return;
+    // Dwell long enough to read without feeling celebratory. No confetti,
+    // no bounce — this is a "quiet pat on the shoulder", per the brief.
+    const t = window.setTimeout(() => dismissBatchMilestone(), 3200);
+    return () => window.clearTimeout(t);
+  }, [activeMilestone, dismissBatchMilestone]);
+
+  if (activeMilestone == null) return null;
+
+  const copy =
+    activeMilestone === 25
+      ? 'A quarter of the way through. Nice, steady progress.'
+      : activeMilestone === 50
+        ? 'Halfway there. Keep the rhythm.'
+        : 'Three-quarters done — almost there.';
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-6 flex items-center gap-2.5 rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-[12.5px] text-emerald-900 transition"
+    >
+      <Sparkles className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
+      <span className="min-w-0 flex-1">{copy}</span>
+      <button
+        type="button"
+        onClick={() => dismissBatchMilestone()}
+        aria-label="Dismiss milestone"
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -202,6 +267,7 @@ function BatchSidebar() {
           const txn = transactions.find((t) => t.id === id);
           if (!txn) return null;
           const isDone = batch.completedIds.has(id);
+          const isSkipped = !isDone && batch.skippedIds.has(id);
           const isCurrent = id === currentId;
           return (
             <button
@@ -224,7 +290,7 @@ function BatchSidebar() {
                   aria-hidden="true"
                 />
               )}
-              <StatusDot done={isDone} current={isCurrent} />
+              <StatusDot done={isDone} current={isCurrent} skipped={isSkipped} />
               <div className="min-w-0 flex-1">
                 <div
                   className={`truncate text-[13px] ${
@@ -232,10 +298,17 @@ function BatchSidebar() {
                       ? 'font-semibold text-ink-900'
                       : isDone
                       ? 'font-medium text-ink-500'
+                      : isSkipped
+                      ? 'font-medium italic text-ink-400'
                       : 'font-medium text-ink-800'
                   }`}
                 >
                   {txn.merchant}
+                  {isSkipped && !isCurrent && (
+                    <span className="ml-1.5 rounded-sm border border-dashed border-ink-300 px-1 py-px text-[10px] font-medium uppercase tracking-wide text-ink-400">
+                      skipped
+                    </span>
+                  )}
                 </div>
                 <div className="truncate text-[11.5px] text-ink-400">
                   {formatDateShort(txn.date)}
@@ -256,7 +329,15 @@ function BatchSidebar() {
   );
 }
 
-function StatusDot({ done, current }: { done: boolean; current: boolean }) {
+function StatusDot({
+  done,
+  current,
+  skipped = false,
+}: {
+  done: boolean;
+  current: boolean;
+  skipped?: boolean;
+}) {
   if (done) {
     return (
       <span
@@ -275,6 +356,17 @@ function StatusDot({ done, current }: { done: boolean; current: boolean }) {
       />
     );
   }
+  if (skipped) {
+    // Dashed-outline marker so the skipped state reads as "intentionally
+    // left" rather than "not started". Same footprint as Pending so the
+    // sidebar alignment stays clean.
+    return (
+      <span
+        className="h-2.5 w-2.5 shrink-0 rounded-full border border-dashed border-ink-300 bg-paper"
+        aria-label="Skipped"
+      />
+    );
+  }
   return (
     <span
       className="h-2.5 w-2.5 shrink-0 rounded-full border border-ink-200 bg-paper"
@@ -284,7 +376,7 @@ function StatusDot({ done, current }: { done: boolean; current: boolean }) {
 }
 
 function BatchDetail({ txn }: { txn: Transaction | null }) {
-  const advanceBatch = useStore((s) => s.advanceBatch);
+  const skipCurrentBatch = useStore((s) => s.skipCurrentBatch);
 
   if (!txn) {
     return (
@@ -325,19 +417,28 @@ function BatchDetail({ txn }: { txn: Transaction | null }) {
           </span>
         </div>
 
+        <MilestoneBanner />
+
         <div className="mt-8">
           <VatEntryBlock
             key={txn.id}
             txn={txn}
             variant="expanded"
-            onSaved={() => advanceBatch()}
+            onSaved={() => useStore.getState().advanceBatch()}
           />
         </div>
 
         <div className="mt-4 flex items-center gap-2 text-[12px] text-ink-400">
           <button
             type="button"
-            onClick={() => advanceBatch()}
+            onClick={(e) => {
+              // Drop focus off any active input first so the virtual
+              // keyboard closes on mobile before we re-render.
+              e.currentTarget.blur();
+              const active = document.activeElement;
+              if (active instanceof HTMLElement) active.blur();
+              skipCurrentBatch();
+            }}
             className="inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-ink-50 hover:text-ink-700"
           >
             <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />

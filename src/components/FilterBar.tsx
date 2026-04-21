@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   BadgeCheck,
@@ -9,13 +9,16 @@ import {
   Landmark,
   ListChecks,
   Sparkles,
+  Tag,
   User,
   Receipt,
   BadgePercent,
+  X as XIcon,
 } from 'lucide-react';
 import { taxYearLabel, taxYearRange, useStore } from '../store';
 import type {
   AccountFilter,
+  Category,
   DateRangeKey,
   FilterKey,
   TaxYearKey,
@@ -86,6 +89,9 @@ export function FilterBar() {
   const personalTaxYear = useStore((s) => s.personalTaxYear);
   const setPersonalTaxYear = useStore((s) => s.setPersonalTaxYear);
   const currentView = useStore((s) => s.currentView);
+  const categoryFilter = useStore((s) => s.categoryFilter);
+  const toggleCategoryFilter = useStore((s) => s.toggleCategoryFilter);
+  const clearCategoryFilter = useStore((s) => s.clearCategoryFilter);
 
   // The "Reviewed" chip only makes sense in the broader ledger view; in
   // the "To review" inbox reviewed items are excluded entirely so the
@@ -157,8 +163,36 @@ export function FilterBar() {
   );
 
   const hasActiveFilter =
-    activeFilters.size > 0 || dateRange !== 'all' || accountFilter !== 'all';
+    activeFilters.size > 0 ||
+    dateRange !== 'all' ||
+    accountFilter !== 'all' ||
+    categoryFilter.size > 0;
   const setCurrentView = useStore((s) => s.setCurrentView);
+
+  // Per-category counts used to colour-code the multi-select options.
+  // The count respects the other currently-active filters so users see
+  // what each checkbox would give them before they tick it.
+  const categoryCounts = useMemo(() => {
+    const base = applyFilters(transactions, {
+      filters: activeFilters,
+      dateRange,
+      customDateRange,
+      account: accountFilter,
+      excludeReviewed: excludeReviewedForCounts,
+    });
+    const map = new Map<Category, number>();
+    for (const t of base) {
+      map.set(t.category, (map.get(t.category) ?? 0) + 1);
+    }
+    return map;
+  }, [
+    transactions,
+    activeFilters,
+    dateRange,
+    customDateRange,
+    accountFilter,
+    excludeReviewedForCounts,
+  ]);
 
   return (
     <div className="z-20 shrink-0 border-b border-ink-100 bg-paper">
@@ -279,10 +313,14 @@ export function FilterBar() {
                 {c.key === 'needs-vat' &&
                   active &&
                   needsVatIdsInScope.length > 0 && (
+                    // Mobile uses the fixed bottom-sheet CTA (MobileBatchCta)
+                    // so this inline button would double up on small widths.
+                    // Desktop/tablet (sm+) keeps the inline affordance next to
+                    // the chip.
                     <button
                       type="button"
                       onClick={() => startBatch(needsVatIdsInScope)}
-                      className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-accent-hover hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2"
+                      className="hidden items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-accent-hover hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 sm:inline-flex"
                       title="Review all transactions that need VAT, one after another (Enter)"
                     >
                       <ListChecks className="h-4 w-4" aria-hidden="true" />
@@ -396,6 +434,13 @@ export function FilterBar() {
             onChange={(v) => setAccountFilter(v as AccountFilter)}
           />
 
+          <CategoryFilterMultiSelect
+            selected={categoryFilter}
+            counts={categoryCounts}
+            onToggle={toggleCategoryFilter}
+            onClear={clearCategoryFilter}
+          />
+
           <button
             type="button"
             className="inline-flex items-center gap-1.5 rounded-full border border-ink-100 bg-paper px-3 py-1.5 text-[12.5px] font-medium text-ink-700 hover:border-ink-200 hover:bg-ink-50"
@@ -438,6 +483,155 @@ function computeReviewTotals(list: Transaction[]) {
   let reviewed = 0;
   for (const t of list) if (t.reviewed) reviewed++;
   return { reviewed, total: list.length };
+}
+
+const CATEGORY_OPTIONS: Category[] = [
+  'Software subscriptions',
+  'Travel',
+  'Meals and entertainment',
+  'Office supplies',
+  'Marketing',
+  'Professional services',
+  'Equipment',
+  'Utilities',
+  'Tax and government',
+  'Income',
+  'Personal',
+];
+
+/**
+ * Secondary category-narrowing filter. Stackable with the existing chip
+ * filters (Needs VAT, Missing receipts, …) and with the date / account
+ * dropdowns. Users pick one or many; the list below re-filters in place.
+ *
+ * Deliberately hidden on mobile for now — the chip strip is already
+ * horizontally scrolling and adding a popover to it would break the
+ * thumb-friendly rhythm. A "Filters" bottom sheet is the planned mobile
+ * entry point for this and the other secondary dropdowns.
+ */
+function CategoryFilterMultiSelect({
+  selected,
+  counts,
+  onToggle,
+  onClear,
+}: {
+  selected: ReadonlySet<Category>;
+  counts: Map<Category, number>;
+  onToggle: (c: Category) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        btnRef.current?.focus();
+      }
+    }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const selectedCount = selected.size;
+  const label =
+    selectedCount === 0
+      ? 'Categories'
+      : selectedCount === 1
+        ? `Category: ${[...selected][0]}`
+        : `Categories (${selectedCount})`;
+
+  return (
+    <div className="relative inline-block">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium transition ${
+          selectedCount > 0
+            ? 'border-accent bg-accent-soft text-accent'
+            : 'border-ink-100 bg-paper text-ink-700 hover:border-ink-200 hover:bg-ink-50'
+        }`}
+      >
+        <Tag className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="max-w-[180px] truncate">{label}</span>
+        <ChevronDown className="h-3.5 w-3.5 text-ink-400" aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          ref={popRef}
+          role="listbox"
+          aria-multiselectable="true"
+          className="absolute left-0 z-30 mt-1 w-[260px] rounded-lg border border-ink-100 bg-paper p-1 shadow-panel"
+        >
+          <div className="flex items-center justify-between border-b border-ink-100 px-2 py-2 text-[11.5px] font-semibold uppercase tracking-wide text-ink-400">
+            <span>Narrow by category</span>
+            {selectedCount > 0 && (
+              <button
+                type="button"
+                onClick={onClear}
+                className="inline-flex items-center gap-1 rounded text-[11px] font-medium normal-case tracking-normal text-accent hover:underline"
+              >
+                <XIcon className="h-3 w-3" aria-hidden="true" />
+                Clear
+              </button>
+            )}
+          </div>
+          <ul className="max-h-[280px] overflow-y-auto scrollbar-thin py-1">
+            {CATEGORY_OPTIONS.map((c) => {
+              const isSelected = selected.has(c);
+              const n = counts.get(c) ?? 0;
+              return (
+                <li key={c}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => onToggle(c)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-ink-800 hover:bg-ink-50 focus:outline-none focus-visible:bg-ink-50"
+                  >
+                    <span
+                      className={`grid h-4 w-4 shrink-0 place-items-center rounded border transition ${
+                        isSelected
+                          ? 'border-accent bg-accent text-white'
+                          : 'border-ink-200 bg-paper'
+                      }`}
+                      aria-hidden="true"
+                    >
+                      {isSelected && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{c}</span>
+                    <span
+                      className={`tabular shrink-0 text-[11.5px] ${
+                        n === 0 ? 'text-ink-300' : 'text-ink-400'
+                      }`}
+                    >
+                      {n}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 type DropdownProps = {

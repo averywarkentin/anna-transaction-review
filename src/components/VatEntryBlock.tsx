@@ -4,6 +4,8 @@ import {
   Check,
   CircleDot,
   Edit2,
+  ExternalLink,
+  Info,
   Sparkles,
   Upload,
   X,
@@ -57,7 +59,10 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
       setEditing(false);
       setConfirm(true);
       if (timerRef.current) window.clearTimeout(timerRef.current);
-      const delay = onSaved ? 600 : 800;
+      // Batch mode wants to auto-advance quickly (600ms feels snappy in a
+      // rhythm). Inline detail on desktop wants a beat longer so the user
+      // definitely clocks the Saved state before it reverts.
+      const delay = onSaved ? 600 : 1200;
       timerRef.current = window.setTimeout(() => {
         setConfirm(false);
         onSaved?.();
@@ -72,30 +77,20 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
     <section className="space-y-2.5">
       <SectionHeading>VAT</SectionHeading>
 
-      {confirm && (
-        <div
-          className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] font-medium text-emerald-800"
-          role="status"
-          aria-live="polite"
-        >
-          <Check className="h-3.5 w-3.5" aria-hidden="true" />
-          VAT added
-        </div>
-      )}
-
       {txn.vatStatus === 'not-applicable' && !editing && (
         <NotApplicableView
           txn={txn}
-          onReopen={() => {
+          onToggleEligible={() => {
             removeVat(txn.id);
             setEditing(true);
           }}
         />
       )}
 
-      {txn.vatStatus === 'recorded' && !editing && !confirm && (
+      {txn.vatStatus === 'recorded' && !editing && (
         <RecordedView
           txn={txn}
+          justSaved={confirm}
           onEdit={() => setEditing(true)}
           onRemove={() => removeVat(txn.id)}
         />
@@ -135,10 +130,13 @@ function SectionHeading({ children }: { children: string }) {
 
 function RecordedView({
   txn,
+  justSaved,
   onEdit,
   onRemove,
 }: {
   txn: Transaction;
+  /** ~1.2s dwell immediately after Save. Adds a green tint + Saved badge. */
+  justSaved?: boolean;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -152,7 +150,15 @@ function RecordedView({
           VAT amount was detected from the removed receipt. Edit VAT if needed.
         </p>
       )}
-      <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-100 bg-paper px-3.5 py-3">
+      <div
+        role={justSaved ? 'status' : undefined}
+        aria-live={justSaved ? 'polite' : undefined}
+        className={`flex items-center justify-between gap-3 rounded-lg border px-3.5 py-3 transition-colors ${
+          justSaved
+            ? 'border-emerald-200 bg-emerald-50/60'
+            : 'border-ink-100 bg-paper'
+        }`}
+      >
         <div className="flex min-w-0 items-center gap-2.5">
           <BadgePercent
             className="h-4 w-4 shrink-0 text-emerald-700"
@@ -166,6 +172,12 @@ function RecordedView({
               <span className="text-[11.5px] font-medium text-ink-400">
                 at {txn.vatRate ?? 20}%
               </span>
+              {justSaved && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-emerald-800">
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                  Saved
+                </span>
+              )}
             </div>
             {methodLabel && (
               <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-ink-50 px-1.5 py-0.5 text-[10.5px] font-medium text-ink-500">
@@ -202,25 +214,64 @@ function RecordedView({
 
 function NotApplicableView({
   txn: _txn,
-  onReopen,
+  onToggleEligible,
 }: {
   txn: Transaction;
-  onReopen: () => void;
+  /** Flip back to VAT-eligible: clears the not-applicable status and
+      drops into the entry form so the user can add VAT. */
+  onToggleEligible: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-100 bg-paper-muted px-3.5 py-3">
+    <div className="space-y-2 rounded-lg border border-ink-100 bg-paper-muted px-3.5 py-3">
       <div className="flex items-center gap-2 text-[12.5px] text-ink-500">
         <CircleDot className="h-3.5 w-3.5 text-ink-300" aria-hidden="true" />
         Not VAT-eligible
       </div>
-      <button
-        type="button"
-        onClick={onReopen}
-        className="text-[12.5px] font-medium text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline"
-      >
-        Add VAT instead
-      </button>
+      <NotEligibleToggle checked onChange={() => onToggleEligible()} />
     </div>
+  );
+}
+
+/**
+ * Little segmented switch shared between the entry view and the
+ * not-applicable view. On = status is `not-applicable`. Off = normal
+ * entry form. Keeps the two code paths from drifting.
+ */
+function NotEligibleToggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="inline-flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-600">
+      <span
+        role="switch"
+        aria-checked={checked}
+        tabIndex={0}
+        onClick={(e) => {
+          e.preventDefault();
+          onChange(!checked);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            onChange(!checked);
+          }
+        }}
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 ${
+          checked ? 'bg-accent' : 'bg-ink-200'
+        }`}
+      >
+        <span
+          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0.5'
+          }`}
+        />
+      </span>
+      <span>This isn't VAT-eligible</span>
+    </label>
   );
 }
 
@@ -291,12 +342,15 @@ function EntryView({
       <div className={variant === 'expanded' ? 'space-y-3' : 'space-y-2.5'}>
         <div className="flex items-end gap-3">
           <div className="flex-1">
-            <label
-              id={`vat-rate-${txn.id}`}
-              className="mb-1 block text-[12px] font-medium text-ink-500"
-            >
-              Rate
-            </label>
+            <div className="mb-1 flex items-center gap-1">
+              <label
+                id={`vat-rate-${txn.id}`}
+                className="block text-[12px] font-medium text-ink-500"
+              >
+                Rate
+              </label>
+              <VatRateTooltip />
+            </div>
             <div
               role="radiogroup"
               aria-labelledby={`vat-rate-${txn.id}`}
@@ -363,6 +417,13 @@ function EntryView({
                 {error}
               </p>
             )}
+            <ImpliedRateHelper
+              gross={gross}
+              amountStr={amountStr}
+              amountDirty={amountDirty}
+              selectedRate={rate}
+              hasError={error !== null}
+            />
           </div>
         </div>
 
@@ -373,16 +434,8 @@ function EntryView({
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-2 pt-1">
-        {/* Tertiary, bottom-left: a quiet escape hatch for a rare case. */}
-        <button
-          type="button"
-          onClick={onMarkNotEligible}
-          className="order-2 inline-flex items-center text-[11.5px] font-medium text-ink-400 underline-offset-2 hover:text-ink-700 hover:underline focus:outline-none focus-visible:text-ink-700 focus-visible:underline sm:order-1"
-        >
-          This isn’t VAT-eligible
-        </button>
-        <div className="order-1 flex flex-wrap items-center gap-1.5 sm:order-2 sm:ml-auto">
+      <div className="flex flex-col gap-3 border-t border-ink-100 pt-3">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           {onCancel && (
             <button
               type="button"
@@ -410,8 +463,137 @@ function EntryView({
             Save VAT amount
           </button>
         </div>
+        <div>
+          {/* Toggle replaces the old tertiary button. Immediate effect:
+              flips the status to not-applicable without needing Save. */}
+          <NotEligibleToggle
+            checked={false}
+            onChange={(next) => {
+              if (next) onMarkNotEligible();
+            }}
+          />
+        </div>
       </div>
     </form>
+  );
+}
+
+/**
+ * Small helper that calls out the implied VAT rate when the typed amount
+ * doesn't match the selected preset within 1% tolerance. Informational
+ * only — does not block save. Stays out of the way when amount is
+ * pristine, invalid, or matches the selected rate.
+ */
+function ImpliedRateHelper({
+  gross,
+  amountStr,
+  amountDirty,
+  selectedRate,
+  hasError,
+}: {
+  gross: number;
+  amountStr: string;
+  amountDirty: boolean;
+  selectedRate: VatRate;
+  hasError: boolean;
+}) {
+  if (!amountDirty || hasError) return null;
+  const parsed = parseFloat(amountStr);
+  if (!Number.isFinite(parsed) || parsed < 0 || gross <= 0) return null;
+  // Implied percentage on the *net* price: net = gross - VAT, rate = VAT/net.
+  // Matches how most UK VAT calculators report it.
+  const net = gross - parsed;
+  if (net <= 0) return null;
+  const implied = (parsed / net) * 100;
+  const diff = Math.abs(implied - selectedRate);
+  if (diff < 1) return null;
+  const suggestedPreset: VatRate =
+    implied <= 2.5 ? 0 : implied <= 12.5 ? 5 : 20;
+  if (suggestedPreset === selectedRate) return null;
+  const suggestedAmount = calcVatFromGross(gross, suggestedPreset);
+  return (
+    <p className="mt-1 text-[11.5px] text-ink-500" role="note">
+      That's about {implied.toFixed(1)}% VAT. If you meant {suggestedPreset}%,
+      the amount would be {formatAmount(suggestedAmount)}.
+    </p>
+  );
+}
+
+/**
+ * Small info icon next to the Rate label. Keeps plain-language guidance
+ * out of the way until the user reaches for it. Click toggles open on
+ * touch where hover isn't available. Esc or outside click closes it.
+ */
+function VatRateTooltip() {
+  const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    function onClick(e: MouseEvent) {
+      if (
+        panelRef.current &&
+        !panelRef.current.contains(e.target as Node) &&
+        !btnRef.current?.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onClick);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onClick);
+    };
+  }, [open]);
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        ref={btnRef}
+        type="button"
+        aria-label="About VAT rates"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-ink-400 hover:text-ink-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
+      >
+        <Info className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          ref={panelRef}
+          role="tooltip"
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+          className="absolute left-1/2 top-full z-30 mt-2 w-[280px] -translate-x-1/2 rounded-lg border border-ink-100 bg-paper p-3 text-[12px] leading-snug text-ink-700 shadow-panel"
+        >
+          <p>
+            20% is the standard UK VAT rate and applies to most business
+            purchases. Reduced rate (5%) covers items like energy and
+            children's car seats. Zero rate (0%) covers food, books, and some
+            transport. If you're unsure, check your receipt or HMRC's
+            guidance.
+          </p>
+          <a
+            href="https://www.gov.uk/guidance/rates-of-vat-on-different-goods-and-services"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-medium text-accent underline-offset-2 hover:underline"
+          >
+            See HMRC rates
+            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+          </a>
+        </div>
+      )}
+    </span>
   );
 }
 
