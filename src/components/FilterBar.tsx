@@ -282,7 +282,7 @@ export function FilterBar() {
                     <button
                       type="button"
                       onClick={() => startBatch(needsVatIdsInScope)}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-1.5 text-[13px] font-semibold text-white shadow-sm ring-1 ring-accent/20 transition hover:bg-accent-hover hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
+                      className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-accent-hover hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2"
                       title="Review all transactions that need VAT, one after another (Enter)"
                     >
                       <ListChecks className="h-4 w-4" aria-hidden="true" />
