@@ -9,6 +9,7 @@ import { RulesModal } from './components/RulesModal';
 import { BatchReviewMode } from './components/BatchReviewMode';
 import { YearEndReviewMode } from './components/YearEndReviewMode';
 import { UndoSnackbar } from './components/UndoSnackbar';
+import { RuleOfferSnackbar } from './components/RuleOfferSnackbar';
 import { MobileBatchCta } from './components/MobileBatchCta';
 import { useStore } from './store';
 import { useIsMobile } from './hooks/useBreakpoint';
@@ -139,6 +140,7 @@ export default function App() {
       <ReceiptUploadModal />
       <RulesModal />
       <UndoSnackbar />
+      <RuleOfferSnackbar />
     </>
   );
 }

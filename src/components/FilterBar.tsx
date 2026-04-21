@@ -74,9 +74,11 @@ export function FilterBar() {
   const transactions = useStore((s) => s.transactions);
   const activeFilters = useStore((s) => s.activeFilters);
   const dateRange = useStore((s) => s.dateRange);
+  const customDateRange = useStore((s) => s.customDateRange);
   const accountFilter = useStore((s) => s.accountFilter);
   const toggleFilter = useStore((s) => s.toggleFilter);
   const setDateRange = useStore((s) => s.setDateRange);
+  const setCustomDateRange = useStore((s) => s.setCustomDateRange);
   const setAccountFilter = useStore((s) => s.setAccountFilter);
   const clearFilters = useStore((s) => s.clearFilters);
   const startBatch = useStore((s) => s.startBatch);
@@ -101,22 +103,24 @@ export function FilterBar() {
     const list = applyFilters(transactions, {
       filters: new Set<FilterKey>(['needs-vat']),
       dateRange,
+      customDateRange,
       account: accountFilter,
       excludeReviewed: true,
     });
     return defaultSort(list).map((t) => t.id);
-  }, [transactions, dateRange, accountFilter]);
+  }, [transactions, dateRange, customDateRange, accountFilter]);
 
   const personalIdsInScope = useMemo(() => {
     const { start, end } = taxYearRange(personalTaxYear);
     const list = applyFilters(transactions, {
       filters: new Set<FilterKey>(['personal']),
       dateRange,
+      customDateRange,
       account: accountFilter,
       excludeReviewed: true,
     }).filter((t) => t.date >= start && t.date <= end);
     return defaultSort(list).map((t) => t.id);
-  }, [transactions, dateRange, accountFilter, personalTaxYear]);
+  }, [transactions, dateRange, customDateRange, accountFilter, personalTaxYear]);
 
   const counts = useMemo(() => {
     const base = Object.fromEntries(
@@ -124,6 +128,7 @@ export function FilterBar() {
         c.key,
         countForFilter(transactions, c.key, {
           dateRange,
+          customDateRange,
           account: accountFilter,
           excludeReviewed: excludeReviewedForCounts,
         }),
@@ -138,6 +143,7 @@ export function FilterBar() {
   }, [
     transactions,
     dateRange,
+    customDateRange,
     accountFilter,
     activeFilters,
     personalIdsInScope,
@@ -331,13 +337,53 @@ export function FilterBar() {
           <Dropdown
             icon={<Calendar className="h-3.5 w-3.5" aria-hidden="true" />}
             label={
-              DATE_OPTIONS.find((o) => o.value === dateRange)?.label ??
-              'All dates'
+              dateRange === 'custom' && customDateRange
+                ? `${customDateRange.start} → ${customDateRange.end}`
+                : DATE_OPTIONS.find((o) => o.value === dateRange)?.label ??
+                  'All dates'
             }
             options={DATE_OPTIONS}
             value={dateRange}
             onChange={(v) => setDateRange(v as DateRangeKey)}
           />
+
+          {dateRange === 'custom' && customDateRange && (
+            <div
+              className="flex items-center gap-1 rounded-full border border-ink-100 bg-paper px-2 py-1"
+              role="group"
+              aria-label="Custom date range"
+            >
+              <label className="sr-only" htmlFor="custom-date-start">
+                Start date
+              </label>
+              <input
+                id="custom-date-start"
+                type="date"
+                value={customDateRange.start}
+                max={customDateRange.end}
+                onChange={(e) =>
+                  setCustomDateRange(e.target.value, customDateRange.end)
+                }
+                className="tabular bg-transparent text-[12px] text-ink-800 focus:outline-none"
+              />
+              <span className="text-[11px] text-ink-400" aria-hidden="true">
+                →
+              </span>
+              <label className="sr-only" htmlFor="custom-date-end">
+                End date
+              </label>
+              <input
+                id="custom-date-end"
+                type="date"
+                value={customDateRange.end}
+                min={customDateRange.start}
+                onChange={(e) =>
+                  setCustomDateRange(customDateRange.start, e.target.value)
+                }
+                className="tabular bg-transparent text-[12px] text-ink-800 focus:outline-none"
+              />
+            </div>
+          )}
 
           <Dropdown
             icon={<Landmark className="h-3.5 w-3.5" aria-hidden="true" />}

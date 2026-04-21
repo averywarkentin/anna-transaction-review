@@ -50,8 +50,13 @@ export function BatchReviewMode() {
         return;
       }
       if (done) return;
-      if (inInput && e.key !== 'Escape') return;
       const key = e.key.toLowerCase();
+      // The VAT amount input auto-focuses when each row loads, so a naive
+      // "if in input, bail" guard swallows the batch-mode shortcuts
+      // (S, U, N) entirely. Whitelist those three past the input guard so
+      // the keyboard flow still works even when focus is on the input.
+      const batchShortcut = key === 's' || key === 'u' || key === 'n';
+      if (inInput && e.key !== 'Escape' && !batchShortcut) return;
       if (key === 's') {
         e.preventDefault();
         advanceBatch();

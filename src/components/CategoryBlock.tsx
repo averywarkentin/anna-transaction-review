@@ -43,6 +43,7 @@ export function CategoryBlock({ txn }: { txn: Transaction }) {
   const transactions = useStore((s) => s.transactions);
   const changeCategory = useStore((s) => s.changeCategory);
   const setRulesModalOpen = useStore((s) => s.setRulesModalOpen);
+  const offerRule = useStore((s) => s.offerRule);
 
   const [editing, setEditing] = useState(false);
   const [pending, setPending] = useState<PendingApply | null>(null);
@@ -89,6 +90,26 @@ export function CategoryBlock({ txn }: { txn: Transaction }) {
     const otherCount = sameMerchantOldCategory(from);
 
     if (otherCount === 0) {
+      // No same-old-category siblings to sweep, but the merchant might
+      // still have siblings under the NEW (or other) category — offer to
+      // lock it in as a rule when the merchant has history and no rule.
+      const pastCount = transactions.filter(
+        (t) =>
+          t.id !== txn.id && t.merchant === txn.merchant && !t.isPersonal,
+      ).length;
+      const isAmbiguous = AMBIGUOUS_MERCHANTS.some(
+        (m) => m.toLowerCase() === txn.merchant.toLowerCase(),
+      );
+      const hasExistingRule = rules.some(
+        (r) => r.merchant.toLowerCase() === txn.merchant.toLowerCase(),
+      );
+      if (pastCount >= 2 && !isAmbiguous && !hasExistingRule) {
+        offerRule({
+          merchant: txn.merchant,
+          fromCategory: from,
+          toCategory,
+        });
+      }
       showConfirm('Category updated.');
       return;
     }
@@ -378,10 +399,39 @@ function ApplyToMerchantPanel({
   onClose: (confirmMsg?: string) => void;
 }) {
   const applyToPast = useStore((s) => s.applyToPastForMerchant);
+  const offerRule = useStore((s) => s.offerRule);
+  const rules = useStore((s) => s.rules);
+  const transactions = useStore((s) => s.transactions);
 
   const isAmbiguous = AMBIGUOUS_MERCHANTS.some(
     (m) => m.toLowerCase() === pending.merchant.toLowerCase(),
   );
+
+  /**
+   * Fire a soft "Always categorise X as Y?" nudge when a single-row
+   * recategorisation looks like it could reasonably be a rule: enough
+   * prior history, no existing rule, merchant isn't a category chameleon.
+   * Fires for both the "Just this one" radio path and the X-dismiss path.
+   */
+  const maybeOfferRule = () => {
+    if (isAmbiguous) return;
+    const hasExistingRule = rules.some(
+      (r) => r.merchant.toLowerCase() === pending.merchant.toLowerCase(),
+    );
+    if (hasExistingRule) return;
+    const pastCount = transactions.filter(
+      (t) =>
+        t.id !== pending.pivotId &&
+        t.merchant === pending.merchant &&
+        !t.isPersonal,
+    ).length;
+    if (pastCount < 2) return;
+    offerRule({
+      merchant: pending.merchant,
+      fromCategory: pending.fromCategory,
+      toCategory: pending.toCategory,
+    });
+  };
 
   const defaultMode: ApplyMode =
     isAmbiguous
@@ -404,6 +454,7 @@ function ApplyToMerchantPanel({
 
   const onConfirm = () => {
     if (mode === 'this-only') {
+      maybeOfferRule();
       onClose('Category updated.');
       return;
     }
@@ -440,7 +491,10 @@ function ApplyToMerchantPanel({
         </div>
         <button
           type="button"
-          onClick={() => onClose('Category updated.')}
+          onClick={() => {
+            maybeOfferRule();
+            onClose('Category updated.');
+          }}
           aria-label="Keep just this one"
           className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-ink-400 hover:bg-paper hover:text-ink-700"
         >

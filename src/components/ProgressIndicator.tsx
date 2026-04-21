@@ -29,10 +29,10 @@ export function ProgressIndicator({ reviewed, total }: Props) {
       onClick={() => setCurrentView('all-transactions')}
       aria-pressed={isActive}
       aria-label="Open all transactions"
-      className={`relative flex h-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left transition hover:border-ink-200 hover:bg-ink-50/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring ${
+      className={`relative flex h-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring ${
         isActive
           ? 'border-accent bg-accent-soft/60'
-          : 'border-ink-100 bg-paper-muted'
+          : 'border-ink-100 bg-paper-muted hover:border-ink-200 hover:bg-ink-50/60'
       }`}
     >
       <div

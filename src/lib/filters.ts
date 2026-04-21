@@ -40,8 +40,19 @@ export function isInVatReturnScope(t: Transaction): boolean {
   return d >= start && d <= end;
 }
 
-function withinDateRange(iso: string, range: DateRangeKey): boolean {
-  if (range === 'all' || range === 'custom') return true;
+function withinDateRange(
+  iso: string,
+  range: DateRangeKey,
+  customRange?: { start: string; end: string } | null,
+): boolean {
+  if (range === 'all') return true;
+  if (range === 'custom') {
+    if (!customRange) return true;
+    // Both endpoints inclusive. ISO date-only strings compare
+    // lexicographically, so string compare is correct here.
+    const day = iso.slice(0, 10);
+    return day >= customRange.start && day <= customRange.end;
+  }
   const d = new Date(iso);
 
   if (range === 'this-month') {
@@ -108,6 +119,8 @@ export function applyFilters(
   opts: {
     filters: ReadonlySet<FilterKey>;
     dateRange: DateRangeKey;
+    /** Inclusive custom start/end when dateRange === 'custom'. */
+    customDateRange?: { start: string; end: string } | null;
     account: AccountFilter;
     /** If true, hide reviewed transactions (the "To review" view). */
     excludeReviewed?: boolean;
@@ -116,7 +129,8 @@ export function applyFilters(
   return transactions.filter((t) => {
     if (opts.excludeReviewed && t.reviewed) return false;
     if (opts.account !== 'all' && t.account !== opts.account) return false;
-    if (!withinDateRange(t.date, opts.dateRange)) return false;
+    if (!withinDateRange(t.date, opts.dateRange, opts.customDateRange))
+      return false;
     for (const f of opts.filters) {
       if (!matchesFilter(t, f)) return false;
     }
@@ -129,6 +143,7 @@ export function countForFilter(
   key: FilterKey,
   baseOpts: {
     dateRange: DateRangeKey;
+    customDateRange?: { start: string; end: string } | null;
     account: AccountFilter;
     /** If true, exclude reviewed transactions from the count. */
     excludeReviewed?: boolean;
@@ -138,7 +153,8 @@ export function countForFilter(
   for (const t of transactions) {
     if (baseOpts.excludeReviewed && t.reviewed) continue;
     if (baseOpts.account !== 'all' && t.account !== baseOpts.account) continue;
-    if (!withinDateRange(t.date, baseOpts.dateRange)) continue;
+    if (!withinDateRange(t.date, baseOpts.dateRange, baseOpts.customDateRange))
+      continue;
     if (matchesFilter(t, key)) n++;
   }
   return n;

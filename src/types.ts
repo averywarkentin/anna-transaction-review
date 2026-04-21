@@ -84,6 +84,12 @@ export type Transaction = {
   personalExpenseNote?: PersonalExpenseNote;
   personalHistory?: PersonalHistoryEntry[];
   reviewed: boolean;
+  /**
+   * Set when the user deliberately marked a receipt-required transaction
+   * as reviewed without attaching a receipt. Surfaced as a subtle caveat
+   * in the detail panel so the decision isn't invisible after the fact.
+   */
+  reviewedWithoutReceipt?: boolean;
   account: Account;
 };
 

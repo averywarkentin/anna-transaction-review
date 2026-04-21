@@ -78,6 +78,13 @@ export type ReceiptModalState = {
   source: ReceiptModalSource;
   /** True when the flow is replacing an existing receipt on the transaction. */
   replace: boolean;
+  /**
+   * Optional file supplied by the caller, e.g. from a drag-and-drop on the
+   * detail panel receipt zone. When present, the modal skips the dropzone
+   * stage and processes the file immediately on open. Cleared after
+   * consumption so re-opens don't re-process.
+   */
+  pendingFile: File | null;
 };
 
 /**
@@ -135,12 +142,33 @@ export type UndoableBulkAction = {
   expiresAt: number;
 };
 
+/**
+ * A soft prompt surfaced after a user recategorises a single transaction
+ * from a merchant they've seen many times. Offers to promote the decision
+ * into a rule so future transactions from that merchant land in the right
+ * place automatically. Auto-dismisses; explicit accept creates the rule.
+ */
+export type RuleOffer = {
+  id: string;
+  merchant: string;
+  fromCategory: Category;
+  toCategory: Category;
+  /** Wall-clock time the snackbar should auto-dismiss. */
+  expiresAt: number;
+};
+
 type Store = {
   transactions: Transaction[];
   rules: MerchantRule[];
 
   activeFilters: Set<FilterKey>;
   dateRange: DateRangeKey;
+  /**
+   * Inclusive start/end for the custom date range picker. Only consulted
+   * when `dateRange === 'custom'`. Stored as ISO date-only strings
+   * (yyyy-mm-dd) to match the native `<input type="date">` value format.
+   */
+  customDateRange: { start: string; end: string } | null;
   accountFilter: AccountFilter;
 
   selectedId: string | null;
@@ -167,6 +195,11 @@ type Store = {
   personalUndo: UndoablePersonalAction | null;
   /** Inline undo for the most recent receipt removal (8s). */
   receiptUndo: UndoableReceiptRemoval | null;
+  /**
+   * Transient offer to promote a single-transaction recategorisation into
+   * a merchant rule. Null when no offer is currently pending.
+   */
+  ruleOffer: RuleOffer | null;
   /** True when the Rules management modal is visible. */
   rulesModalOpen: boolean;
 
@@ -178,6 +211,8 @@ type Store = {
   toggleFilter: (f: FilterKey) => void;
   clearFilters: () => void;
   setDateRange: (d: DateRangeKey) => void;
+  /** Update the custom start/end (also forces dateRange to 'custom'). */
+  setCustomDateRange: (start: string, end: string) => void;
   setAccountFilter: (a: AccountFilter) => void;
 
   setSelected: (id: string | null) => void;
@@ -274,9 +309,14 @@ type Store = {
   openReceiptModal: (
     txnId: string,
     source: ReceiptModalSource,
-    opts?: { replace?: boolean },
+    opts?: { replace?: boolean; pendingFile?: File | null },
   ) => void;
   closeReceiptModal: () => void;
+  /**
+   * Clear a consumed `pendingFile` after the modal has handed it off to the
+   * processing stage, so subsequent re-opens start at the dropzone.
+   */
+  consumeReceiptPendingFile: () => void;
 
   /**
    * Change a single transaction's category. Does NOT show the "Apply to other?"
@@ -306,6 +346,35 @@ type Store = {
    * transaction from that merchant (regardless of current category).
    */
   setRuleForMerchant: (merchant: string, toCategory: Category) => void;
+  /**
+   * Create a merchant rule from the RulesModal "New rule" form. When
+   * `applyToExisting` is true this funnels through the same retro-apply
+   * path as recategorising from a transaction; when false, we only push
+   * the rule so future transactions land in the chosen category.
+   */
+  createMerchantRule: (
+    merchant: string,
+    toCategory: Category,
+    opts: { applyToExisting: boolean },
+  ) => void;
+  /**
+   * Surface a soft "Always categorise X as Y?" snackbar after a single-row
+   * recategorisation. Callers decide eligibility (past txn count, missing
+   * rule, non-ambiguous merchant). Auto-expires after 8s.
+   */
+  offerRule: (args: {
+    merchant: string;
+    fromCategory: Category;
+    toCategory: Category;
+  }) => void;
+  /** Dismiss a pending rule offer without creating the rule. */
+  dismissRuleOffer: () => void;
+  /**
+   * Accept the pending rule offer: create a new merchant rule pointing at
+   * the new category, without retroactively rewriting existing
+   * transactions (the user explicitly picked "Just this one").
+   */
+  acceptRuleOffer: () => void;
 
   /** Undo the most recent bulk action. */
   undoLastBulk: () => void;
@@ -329,6 +398,13 @@ type Store = {
    * checked set on completion so the next selection is a fresh one.
    */
   bulkSetReviewed: (ids: string[], reviewed: boolean) => void;
+  /**
+   * Mark one or more transactions as reviewed while explicitly skipping
+   * the receipt-required check. Sets `reviewedWithoutReceipt` on each so
+   * the deliberate override is discoverable after the fact (and the flag
+   * clears automatically if a receipt is attached later).
+   */
+  markReviewedWithoutReceipt: (ids: string[]) => void;
 };
 
 const emptyBatch: BatchState = {
@@ -465,6 +541,7 @@ export const useStore = create<Store>((set, get) => ({
 
   activeFilters: new Set<FilterKey>(),
   dateRange: 'all',
+  customDateRange: null,
   accountFilter: 'all',
 
   selectedId: null,
@@ -476,11 +553,18 @@ export const useStore = create<Store>((set, get) => ({
   focusedMerchant: null,
 
   batch: emptyBatch,
-  receiptModal: { open: false, txnId: null, source: 'detail', replace: false },
+  receiptModal: {
+    open: false,
+    txnId: null,
+    source: 'detail',
+    replace: false,
+    pendingFile: null,
+  },
 
   undoable: null,
   personalUndo: null,
   receiptUndo: null,
+  ruleOffer: null,
   rulesModalOpen: false,
 
   personalTaxYear: 'previous',
@@ -498,10 +582,30 @@ export const useStore = create<Store>((set, get) => ({
     set(() => ({
       activeFilters: new Set<FilterKey>(),
       dateRange: 'all' as DateRangeKey,
+      customDateRange: null,
       accountFilter: 'all' as AccountFilter,
     })),
 
-  setDateRange: (d) => set(() => ({ dateRange: d })),
+  setDateRange: (d) =>
+    set((s) => {
+      if (d !== 'custom') return { dateRange: d };
+      // Seed a sensible default range when flipping into custom for the
+      // first time: last 30 days ending today. User can adjust from there.
+      if (s.customDateRange) return { dateRange: d };
+      const today = new Date('2026-04-18T12:00:00Z');
+      const end = today.toISOString().slice(0, 10);
+      const startDate = new Date(today);
+      startDate.setUTCDate(startDate.getUTCDate() - 30);
+      const start = startDate.toISOString().slice(0, 10);
+      return { dateRange: d, customDateRange: { start, end } };
+    }),
+
+  setCustomDateRange: (start, end) =>
+    set(() => ({
+      dateRange: 'custom' as DateRangeKey,
+      customDateRange: { start, end },
+    })),
+
   setAccountFilter: (a) => set(() => ({ accountFilter: a })),
 
   setSelected: (id) => set(() => ({ selectedId: id })),
@@ -648,6 +752,9 @@ export const useStore = create<Store>((set, get) => ({
         receiptMimeType: args.mimeType,
         receiptDataUrl: args.dataUrl,
         receiptUploadedAt: new Date().toISOString(),
+        // If this row had been reviewed-without-receipt, attaching one
+        // retroactively clears the caveat: the record is now complete.
+        reviewedWithoutReceipt: false,
       }),
       // If a removal undo was pending, clear it: a fresh attach supersedes it.
       receiptUndo: null,
@@ -753,12 +860,18 @@ export const useStore = create<Store>((set, get) => ({
         txnId,
         source,
         replace: opts?.replace ?? false,
+        pendingFile: opts?.pendingFile ?? null,
       },
     })),
 
   closeReceiptModal: () =>
     set((s) => ({
-      receiptModal: { ...s.receiptModal, open: false },
+      receiptModal: { ...s.receiptModal, open: false, pendingFile: null },
+    })),
+
+  consumeReceiptPendingFile: () =>
+    set((s) => ({
+      receiptModal: { ...s.receiptModal, pendingFile: null },
     })),
 
   changeCategory: (id, to) =>
@@ -977,6 +1090,67 @@ export const useStore = create<Store>((set, get) => ({
       };
     }),
 
+  createMerchantRule: (merchant, toCategory, { applyToExisting }) => {
+    if (applyToExisting) {
+      // Delegate to the retro-applying path so we get the same snapshot /
+      // undoable semantics as rule creation from a transaction row.
+      get().setRuleForMerchant(merchant, toCategory);
+      return;
+    }
+    set((s) => {
+      // Drop any previous rule for this merchant — we replace it.
+      const existingRules = s.rules.filter(
+        (r) => r.merchant.toLowerCase() !== merchant.toLowerCase(),
+      );
+      const newRule: MerchantRule = {
+        id: `rule_${merchant.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${Date.now()}`,
+        merchant,
+        category: toCategory,
+        createdAt: new Date().toISOString(),
+        appliedToPastCount: 0,
+      };
+      return {
+        rules: [...existingRules, newRule],
+      };
+    });
+  },
+
+  offerRule: ({ merchant, fromCategory, toCategory }) =>
+    set(() => ({
+      ruleOffer: {
+        id: `offer_${Date.now()}`,
+        merchant,
+        fromCategory,
+        toCategory,
+        expiresAt: Date.now() + 8000,
+      },
+    })),
+
+  dismissRuleOffer: () => set(() => ({ ruleOffer: null })),
+
+  acceptRuleOffer: () =>
+    set((s) => {
+      const offer = s.ruleOffer;
+      if (!offer) return {};
+      // Drop any stale rule for this merchant; the offer is authoritative.
+      const existingRules = s.rules.filter(
+        (r) => r.merchant.toLowerCase() !== offer.merchant.toLowerCase(),
+      );
+      const newRule: MerchantRule = {
+        id: `rule_${offer.merchant.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${Date.now()}`,
+        merchant: offer.merchant,
+        category: offer.toCategory,
+        createdAt: new Date().toISOString(),
+        // We deliberately don't retro-apply to existing transactions —
+        // the user already picked "Just this one" for the pivot row.
+        appliedToPastCount: 0,
+      };
+      return {
+        rules: [...existingRules, newRule],
+        ruleOffer: null,
+      };
+    }),
+
   undoLastBulk: () => {
     const undoable = get().undoable;
     if (!undoable) return;
@@ -1046,6 +1220,20 @@ export const useStore = create<Store>((set, get) => ({
       const changed = s.transactions.map((t) =>
         targetIds.has(t.id) && t.reviewed !== reviewed
           ? { ...t, reviewed }
+          : t,
+      );
+      return {
+        transactions: changed,
+        checkedIds: new Set<string>(),
+      };
+    }),
+
+  markReviewedWithoutReceipt: (ids) =>
+    set((s) => {
+      const targetIds = new Set(ids);
+      const changed = s.transactions.map((t) =>
+        targetIds.has(t.id)
+          ? { ...t, reviewed: true, reviewedWithoutReceipt: true }
           : t,
       );
       return {

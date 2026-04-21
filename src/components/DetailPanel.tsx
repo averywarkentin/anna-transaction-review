@@ -22,12 +22,14 @@ import { CategoryBlock } from './CategoryBlock';
 import { VatEntryBlock } from './VatEntryBlock';
 import { AuditTrailPopover } from './AuditTrailPopover';
 import { ReceiptLightbox } from './ReceiptLightbox';
+import { ReceiptRequiredModal } from './ReceiptRequiredModal';
 import type { Transaction } from '../types';
 
 export function DetailPanel() {
   const transactions = useStore((s) => s.transactions);
   const selectedId = useStore((s) => s.selectedId);
   const setSelected = useStore((s) => s.setSelected);
+  const openReceiptModal = useStore((s) => s.openReceiptModal);
   const isMobile = useIsMobile();
   const visible = useVisibleTransactions();
 
@@ -37,6 +39,10 @@ export function DetailPanel() {
   // When we run out of unreviewed items post-advance, we swap the whole
   // panel for a dedicated "All caught up" screen with a back-to-list CTA.
   const [caughtUp, setCaughtUp] = useState(false);
+  // Shown when the user hits "Mark as reviewed" on a receipt-required
+  // transaction that has no receipt attached. Gates the commit until
+  // they explicitly upload or override.
+  const [receiptGateOpen, setReceiptGateOpen] = useState(false);
 
   // Any change to the current selection (navigation via prev/next, tapping
   // a different row on desktop, etc.) cancels a pending caught-up screen
@@ -91,9 +97,19 @@ export function DetailPanel() {
   // txn is gone, or priorIdx+1 if it's still there (all-transactions
   // view). We skip any already-reviewed items after that so users never
   // land back on something they don't need to review.
-  const handlePrimaryAction = () => {
+  /**
+   * Commit the "reviewed" state change and trigger mobile auto-advance.
+   * Split out of `handlePrimaryAction` so the receipt-required gate can
+   * fall through here after the user explicitly picks "Mark as reviewed
+   * anyway" without duplicating the advance logic.
+   */
+  const commitReviewed = (withoutReceipt: boolean) => {
     const wasReviewed = txn.reviewed;
-    useStore.getState().toggleReviewed(txn.id);
+    if (withoutReceipt) {
+      useStore.getState().markReviewedWithoutReceipt([txn.id]);
+    } else {
+      useStore.getState().toggleReviewed(txn.id);
+    }
     if (!isMobile || wasReviewed) return;
 
     setConfirming(true);
@@ -107,6 +123,7 @@ export function DetailPanel() {
         transactions: state.transactions,
         activeFilters: state.activeFilters,
         dateRange: state.dateRange,
+        customDateRange: state.customDateRange,
         accountFilter: state.accountFilter,
         personalTaxYear: state.personalTaxYear,
         currentView: state.currentView,
@@ -129,6 +146,15 @@ export function DetailPanel() {
     }, 600);
   };
 
+  const handlePrimaryAction = () => {
+    // Unmarking ("Unmark as reviewed") never needs the receipt gate.
+    if (!txn.reviewed && txn.receiptRequired && !txn.receiptAttached) {
+      setReceiptGateOpen(true);
+      return;
+    }
+    commitReviewed(false);
+  };
+
   return (
     <aside
       aria-label={`Details for ${txn.merchant}`}
@@ -147,6 +173,21 @@ export function DetailPanel() {
         txn={txn}
         confirming={confirming}
         onPrimary={handlePrimaryAction}
+      />
+      <ReceiptRequiredModal
+        open={receiptGateOpen}
+        total={1}
+        missingCount={1}
+        merchant={txn.merchant}
+        onUploadReceipt={() => {
+          setReceiptGateOpen(false);
+          openReceiptModal(txn.id, 'detail');
+        }}
+        onMarkAnyway={() => {
+          setReceiptGateOpen(false);
+          commitReviewed(true);
+        }}
+        onCancel={() => setReceiptGateOpen(false)}
       />
     </aside>
   );
@@ -407,27 +448,23 @@ function ReceiptBlock({ txn }: { txn: Transaction }) {
           </div>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => openReceiptModal(txn.id, 'detail')}
-          className="flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-ink-200 bg-paper-muted px-4 py-6 text-center hover:border-ink-300 hover:bg-ink-50"
-        >
-          <Upload className="h-5 w-5 text-ink-400" aria-hidden="true" />
-          <span>
-            <span className="block text-[13px] font-medium text-ink-700">
-              Drop a receipt here
-            </span>
-            <span className="block text-[12px] text-ink-400">
-              or click to upload · PDF, JPG, PNG
-            </span>
-          </span>
-        </button>
+        <ReceiptDropZone
+          onOpenPicker={() => openReceiptModal(txn.id, 'detail')}
+          onDropFile={(file) =>
+            openReceiptModal(txn.id, 'detail', { pendingFile: file })
+          }
+        />
       )}
 
       {txn.receiptRequired && !txn.receiptAttached && !undoActive && (
         <p className="flex items-center gap-1.5 text-[12px] text-amber-700">
           <Receipt className="h-3.5 w-3.5" aria-hidden="true" />
           Receipt required for HMRC
+          {txn.reviewedWithoutReceipt && (
+            <span className="ml-1 text-ink-500">
+              · marked reviewed without receipt
+            </span>
+          )}
         </p>
       )}
 
@@ -462,6 +499,108 @@ function ReceiptBlock({ txn }: { txn: Transaction }) {
         />
       )}
     </section>
+  );
+}
+
+/**
+ * Inline receipt drop zone with direct drag-and-drop support. Dropping a
+ * file hands it straight to the upload modal via `pendingFile`, skipping
+ * the dropzone stage. Clicking opens the modal empty. Invalid file types
+ * surface a 4s inline error and do not open the modal.
+ */
+function ReceiptDropZone({
+  onOpenPicker,
+  onDropFile,
+}: {
+  onOpenPicker: () => void;
+  onDropFile: (file: File) => void;
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const errorTimerRef = useRef<number | null>(null);
+
+  const showError = (msg: string) => {
+    setError(msg);
+    if (errorTimerRef.current) window.clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = window.setTimeout(() => setError(null), 4000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (errorTimerRef.current) window.clearTimeout(errorTimerRef.current);
+    };
+  }, []);
+
+  const isValid = (file: File) => {
+    const t = file.type;
+    if (t === 'image/jpeg' || t === 'image/png' || t === 'application/pdf')
+      return true;
+    const lower = file.name.toLowerCase();
+    return (
+      lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.pdf')
+    );
+  };
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={onOpenPicker}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={(e) => {
+          // Only clear when leaving the button itself, not a child.
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+          setIsDragging(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          const file = e.dataTransfer.files[0];
+          if (!file) return;
+          if (!isValid(file)) {
+            showError('Unsupported file type. Use JPG, PNG, or PDF.');
+            return;
+          }
+          onDropFile(file);
+        }}
+        className={`flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition ${
+          isDragging
+            ? 'border-accent bg-accent-soft'
+            : 'border-ink-200 bg-paper-muted hover:border-ink-300 hover:bg-ink-50'
+        }`}
+      >
+        <Upload
+          className={`h-5 w-5 ${isDragging ? 'text-accent' : 'text-ink-400'}`}
+          aria-hidden="true"
+        />
+        <span>
+          <span className="block text-[13px] font-medium text-ink-700">
+            {isDragging ? 'Drop to upload' : 'Drop a receipt here'}
+          </span>
+          <span className="block text-[12px] text-ink-400">
+            or click to upload · PDF, JPG, PNG
+          </span>
+        </span>
+      </button>
+      {error && (
+        <p
+          role="alert"
+          className="text-[12px] text-red-700"
+        >
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

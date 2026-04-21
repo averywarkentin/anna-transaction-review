@@ -39,6 +39,9 @@ type Stage =
 export function ReceiptUploadModal() {
   const modal = useStore((s) => s.receiptModal);
   const closeReceiptModal = useStore((s) => s.closeReceiptModal);
+  const consumeReceiptPendingFile = useStore(
+    (s) => s.consumeReceiptPendingFile,
+  );
   const transactions = useStore((s) => s.transactions);
   const attachReceipt = useStore((s) => s.attachReceipt);
   const saveVat = useStore((s) => s.saveVat);
@@ -67,6 +70,7 @@ export function ReceiptUploadModal() {
       if (timerRef.current) window.clearTimeout(timerRef.current);
       lastFocusedRef.current?.focus();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modal.open]);
 
   useEffect(() => {
@@ -84,72 +88,34 @@ export function ReceiptUploadModal() {
     return () => window.removeEventListener('keydown', onKey);
   }, [modal.open, closeReceiptModal]);
 
+  // When an external caller supplies a pre-selected file (e.g. a drop on
+  // the detail panel), skip the dropzone stage and process immediately.
+  useEffect(() => {
+    if (!modal.open || !modal.pendingFile || !txn) return;
+    const file = modal.pendingFile;
+    consumeReceiptPendingFile();
+    handleFile(file, txn, setStage, timerRef);
+  }, [modal.open, modal.pendingFile, txn, consumeReceiptPendingFile]);
+
   if (!modal.open || !txn) return null;
 
-  const simulateProcessing = (file: UploadedFile) => {
-    setStage({ kind: 'processing', ...file });
-    const delay = 1500 + Math.random() * 1000;
-    timerRef.current = window.setTimeout(() => {
-      if (Math.random() < 0.8) {
-        const gross = Math.abs(txn.amount);
-        const rate: VatRate = DEFAULT_VAT_RATES[txn.category] === 0
-          ? 20
-          : DEFAULT_VAT_RATES[txn.category];
-        const amount = calcVatFromGross(gross, rate);
-        const exactMatch = Math.random() < 0.6;
-        setStage({
-          kind: 'success',
-          ...file,
-          detectedRate: rate,
-          detectedAmount: amount,
-          detectedTotal: gross,
-          detectedMerchant: exactMatch
-            ? txn.merchant
-            : variantMerchant(txn.merchant),
-          exactMatch,
-        });
-      } else {
-        setStage({ kind: 'failure', ...file });
-      }
-    }, delay);
-  };
-
-  const onFile = (file: File) => {
-    const mimeType = normaliseMime(file.type, file.name);
-    // PDFs don't get an inline preview — the icon is rendered from the mime.
-    if (mimeType === 'application/pdf') {
-      simulateProcessing({
-        filename: file.name,
-        mimeType,
-        thumbnail: 'pdf',
-      });
-      return;
-    }
-    // Images: read as base64 data URL so the receipt survives modal close
-    // and shows up in the detail panel thumbnail.
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-      simulateProcessing({
-        filename: file.name,
-        mimeType,
-        dataUrl,
-        thumbnail: dataUrl,
-      });
-    };
-    reader.readAsDataURL(file);
-  };
+  const onFile = (file: File) => handleFile(file, txn, setStage, timerRef);
 
   const onSimulateFile = () => {
     // Allow clicking the zone without a real file — synthesise one for the flow.
     // The SVG rides inside a data URL and renders cleanly in <img>.
     const dataUrl = svgPreview(txn.merchant);
-    simulateProcessing({
-      filename: `receipt-${txn.id}.png`,
-      mimeType: 'image/png',
-      dataUrl,
-      thumbnail: dataUrl,
-    });
+    simulateProcessing(
+      {
+        filename: `receipt-${txn.id}.png`,
+        mimeType: 'image/png',
+        dataUrl,
+        thumbnail: dataUrl,
+      },
+      txn,
+      setStage,
+      timerRef,
+    );
   };
 
   const onSaveFromSuccess = () => {
@@ -187,12 +153,8 @@ export function ReceiptUploadModal() {
               id="receipt-modal-title"
               className="text-[15px] font-semibold text-ink-900"
             >
-              {modal.replace ? `Replace receipt for ${txn.merchant}` : 'Upload receipt'}
+              {modal.replace ? 'Replace receipt' : 'Upload receipt'}
             </h2>
-            <p className="mt-0.5 truncate text-[12.5px] text-ink-400">
-              {txn.merchant} · {formatAmount(txn.amount, { signed: true })} ·{' '}
-              {formatDateLong(txn.date)}
-            </p>
           </div>
           <button
             type="button"
@@ -205,6 +167,40 @@ export function ReceiptUploadModal() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-5 sm:flex-none">
+          {/* Prominent context strip: confirms to the user which
+              transaction this upload attaches to. Lives above every
+              stage so the anchor never scrolls out while the user is
+              processing or reviewing detected values. */}
+          <div
+            className="mb-4 flex items-start gap-3 rounded-lg border border-accent-soft bg-accent-soft/40 px-3 py-2.5"
+            aria-label="Attaching receipt to transaction"
+          >
+            <FileText
+              className="mt-0.5 h-4 w-4 shrink-0 text-accent"
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1 text-[12.5px] text-ink-700">
+              <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-500">
+                Attaching receipt to
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="truncate text-[13.5px] font-semibold text-ink-900">
+                  {txn.merchant}
+                </span>
+                <span className="text-ink-500">
+                  {formatDateLong(txn.date)}
+                </span>
+                <span
+                  className={`tabular font-semibold ${
+                    txn.amount > 0 ? 'text-emerald-700' : 'text-ink-900'
+                  }`}
+                >
+                  {formatAmount(txn.amount, { signed: true })}
+                </span>
+              </div>
+            </div>
+          </div>
+
           {stage.kind === 'dropzone' && (
             <DropzoneStage onFile={onFile} onClickZone={onSimulateFile} />
           )}
@@ -229,6 +225,74 @@ export function ReceiptUploadModal() {
       </div>
     </div>
   );
+}
+
+/**
+ * Shared entry point for file → processing, used both by the in-modal
+ * dropzone/browse/camera flows and by external drops that pre-fill the
+ * modal via `openReceiptModal({ pendingFile })`.
+ */
+function handleFile(
+  file: File,
+  txn: Transaction,
+  setStage: (s: Stage) => void,
+  timerRef: { current: number | null },
+) {
+  const mimeType = normaliseMime(file.type, file.name);
+  if (mimeType === 'application/pdf') {
+    simulateProcessing(
+      { filename: file.name, mimeType, thumbnail: 'pdf' },
+      txn,
+      setStage,
+      timerRef,
+    );
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+    simulateProcessing(
+      { filename: file.name, mimeType, dataUrl, thumbnail: dataUrl },
+      txn,
+      setStage,
+      timerRef,
+    );
+  };
+  reader.readAsDataURL(file);
+}
+
+function simulateProcessing(
+  file: UploadedFile,
+  txn: Transaction,
+  setStage: (s: Stage) => void,
+  timerRef: { current: number | null },
+) {
+  setStage({ kind: 'processing', ...file });
+  const delay = 1500 + Math.random() * 1000;
+  timerRef.current = window.setTimeout(() => {
+    if (Math.random() < 0.8) {
+      const gross = Math.abs(txn.amount);
+      const rate: VatRate =
+        DEFAULT_VAT_RATES[txn.category] === 0
+          ? 20
+          : DEFAULT_VAT_RATES[txn.category];
+      const amount = calcVatFromGross(gross, rate);
+      const exactMatch = Math.random() < 0.6;
+      setStage({
+        kind: 'success',
+        ...file,
+        detectedRate: rate,
+        detectedAmount: amount,
+        detectedTotal: gross,
+        detectedMerchant: exactMatch
+          ? txn.merchant
+          : variantMerchant(txn.merchant),
+        exactMatch,
+      });
+    } else {
+      setStage({ kind: 'failure', ...file });
+    }
+  }, delay);
 }
 
 function DropzoneStage({

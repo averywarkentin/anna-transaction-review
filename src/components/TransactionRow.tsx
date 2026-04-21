@@ -59,6 +59,27 @@ function Row({ txn, selected, checked, onSelect, onToggleCheck }: Props) {
             aria-hidden="true"
           />
         )}
+        {/* Per-card checkbox: mirrors the desktop grid's first column so
+            mobile users can multi-select and, crucially, deselect
+            individual rows once bulk mode is active. Tapping the checkbox
+            doesn't open the detail panel. Target size kept comfortable
+            for thumb use (44×44). */}
+        <div
+          className="flex shrink-0 items-center pr-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <label
+            className="grid h-11 w-7 cursor-pointer place-items-center"
+            aria-label={`Select ${txn.merchant} ${formatAmount(txn.amount)}`}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={onToggleCheck}
+              className="h-5 w-5 cursor-pointer rounded border-ink-200 text-accent focus:ring-accent-ring"
+            />
+          </label>
+        </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-start justify-between gap-3">
             <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink-900">

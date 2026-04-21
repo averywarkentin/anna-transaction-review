@@ -17,6 +17,7 @@ import { formatAmount } from '../lib/format';
 import { useIsMobile } from '../hooks/useBreakpoint';
 import { useVisibleTransactions } from '../hooks/useVisibleTransactions';
 import { TransactionRow } from './TransactionRow';
+import { ReceiptRequiredModal } from './ReceiptRequiredModal';
 import type { Category, MerchantRule, Transaction } from '../types';
 
 // Row columns. Merchant, Date, and Amount anchor the row at fixed
@@ -562,8 +563,12 @@ function BulkActionBar({
   const [mode, setMode] = useState<'idle' | 'recategorise' | 'personal'>(
     'idle',
   );
+  const [receiptGateOpen, setReceiptGateOpen] = useState(false);
   const bulkMarkPersonal = useStore((s) => s.bulkMarkPersonal);
   const bulkSetReviewed = useStore((s) => s.bulkSetReviewed);
+  const markReviewedWithoutReceipt = useStore(
+    (s) => s.markReviewedWithoutReceipt,
+  );
   const transactions = useStore((s) => s.transactions);
 
   // Only count non-personal targets for the confirmation copy, since
@@ -589,6 +594,28 @@ function BulkActionBar({
     }
     return { reviewedCount: r, unreviewedCount: u };
   }, [transactions, checkedIds]);
+
+  // How many of the currently-selected rows are receipt-required but
+  // have no receipt attached. Used to decide whether "Mark as reviewed"
+  // needs the confirmation gate.
+  const missingReceiptCount = useMemo(() => {
+    const ids = new Set(checkedIds);
+    let n = 0;
+    for (const t of transactions) {
+      if (!ids.has(t.id)) continue;
+      if (t.reviewed) continue;
+      if (t.receiptRequired && !t.receiptAttached) n++;
+    }
+    return n;
+  }, [transactions, checkedIds]);
+
+  const handleMarkReviewed = () => {
+    if (missingReceiptCount > 0) {
+      setReceiptGateOpen(true);
+      return;
+    }
+    bulkSetReviewed(checkedIds, true);
+  };
 
   return (
     <div className="sticky top-0 z-10 border-b border-ink-100 bg-accent-soft">
@@ -635,7 +662,7 @@ function BulkActionBar({
           {unreviewedCount > 0 && (
             <button
               type="button"
-              onClick={() => bulkSetReviewed(checkedIds, true)}
+              onClick={handleMarkReviewed}
               className="inline-flex items-center rounded-md border border-ink-100 bg-paper px-2.5 py-1 text-[12px] font-medium text-ink-700 shadow-sm hover:border-ink-200 hover:text-ink-900"
               title={
                 reviewedCount > 0
@@ -685,6 +712,45 @@ function BulkActionBar({
           }}
         />
       )}
+
+      <ReceiptRequiredModal
+        open={receiptGateOpen}
+        total={unreviewedCount}
+        missingCount={missingReceiptCount}
+        onUploadReceipt={() => {
+          // The bulk flow can't resolve a batch of missing receipts by
+          // opening a single uploader, so for now we just bail the user
+          // back to the list with the gate closed. The "Missing receipts"
+          // filter chip + per-row uploader is the intended path here; the
+          // override button still works from inside the modal.
+          setReceiptGateOpen(false);
+        }}
+        onMarkAnyway={() => {
+          // Only flag the rows that actually needed a receipt; the rest
+          // go through the ordinary reviewed path so they don't inherit
+          // the override caveat unnecessarily.
+          const missingIds = transactions
+            .filter(
+              (t) =>
+                checkedIds.includes(t.id) &&
+                !t.reviewed &&
+                t.receiptRequired &&
+                !t.receiptAttached,
+            )
+            .map((t) => t.id);
+          const remainingIds = checkedIds.filter(
+            (id) => !missingIds.includes(id),
+          );
+          if (remainingIds.length > 0) {
+            bulkSetReviewed(remainingIds, true);
+          }
+          if (missingIds.length > 0) {
+            markReviewedWithoutReceipt(missingIds);
+          }
+          setReceiptGateOpen(false);
+        }}
+        onCancel={() => setReceiptGateOpen(false)}
+      />
     </div>
   );
 }

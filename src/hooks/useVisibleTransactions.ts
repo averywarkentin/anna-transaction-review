@@ -19,6 +19,7 @@ type VisibleInputs = {
   transactions: Transaction[];
   activeFilters: ReadonlySet<FilterKey>;
   dateRange: DateRangeKey;
+  customDateRange: { start: string; end: string } | null;
   accountFilter: AccountFilter;
   personalTaxYear: TaxYearKey;
   currentView: 'to-review' | 'all-transactions';
@@ -36,6 +37,7 @@ export function computeVisibleTransactions(
   let list = applyFilters(s.transactions, {
     filters: s.activeFilters,
     dateRange: s.dateRange,
+    customDateRange: s.customDateRange,
     account: s.accountFilter,
     excludeReviewed: s.currentView === 'to-review',
   });
@@ -55,6 +57,7 @@ export function useVisibleTransactions(): Transaction[] {
   const transactions = useStore((s) => s.transactions);
   const activeFilters = useStore((s) => s.activeFilters);
   const dateRange = useStore((s) => s.dateRange);
+  const customDateRange = useStore((s) => s.customDateRange);
   const accountFilter = useStore((s) => s.accountFilter);
   const personalTaxYear = useStore((s) => s.personalTaxYear);
   const currentView = useStore((s) => s.currentView);
@@ -65,6 +68,7 @@ export function useVisibleTransactions(): Transaction[] {
         transactions,
         activeFilters,
         dateRange,
+        customDateRange,
         accountFilter,
         personalTaxYear,
         currentView,
@@ -73,6 +77,7 @@ export function useVisibleTransactions(): Transaction[] {
       transactions,
       activeFilters,
       dateRange,
+      customDateRange,
       accountFilter,
       personalTaxYear,
       currentView,

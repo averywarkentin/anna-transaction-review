@@ -10,6 +10,8 @@ export function VatReadinessSummary() {
   const transactions = useStore((s) => s.transactions);
   const toggleFilter = useStore((s) => s.toggleFilter);
   const activeFilters = useStore((s) => s.activeFilters);
+  const currentView = useStore((s) => s.currentView);
+  const setCurrentView = useStore((s) => s.setCurrentView);
 
   const { ready, total, needsVat, daysToEnd } = useMemo(() => {
     // "Eligible" = VAT-eligible category, debit, current VAT quarter.
@@ -63,6 +65,10 @@ export function VatReadinessSummary() {
         <button
           type="button"
           onClick={() => {
+            // Jump from "All transactions" into the to-review inbox so
+            // the Needs VAT filter has something to narrow — applying it
+            // while the ledger shows reviewed rows too is confusing.
+            if (currentView !== 'to-review') setCurrentView('to-review');
             if (!activeFilters.has('needs-vat')) toggleFilter('needs-vat');
           }}
           className="truncate text-left text-[11.5px] text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline"

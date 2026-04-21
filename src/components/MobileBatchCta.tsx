@@ -20,6 +20,7 @@ export function MobileBatchCta() {
   const transactions = useStore((s) => s.transactions);
   const activeFilters = useStore((s) => s.activeFilters);
   const dateRange = useStore((s) => s.dateRange);
+  const customDateRange = useStore((s) => s.customDateRange);
   const accountFilter = useStore((s) => s.accountFilter);
   const currentView = useStore((s) => s.currentView);
   const startBatch = useStore((s) => s.startBatch);
@@ -30,11 +31,19 @@ export function MobileBatchCta() {
     const list = applyFilters(transactions, {
       filters: new Set<FilterKey>(['needs-vat']),
       dateRange,
+      customDateRange,
       account: accountFilter,
       excludeReviewed: true,
     });
     return defaultSort(list).map((t) => t.id);
-  }, [transactions, activeFilters, dateRange, accountFilter, currentView]);
+  }, [
+    transactions,
+    activeFilters,
+    dateRange,
+    customDateRange,
+    accountFilter,
+    currentView,
+  ]);
 
   if (ids.length === 0) return null;
 
