@@ -45,6 +45,7 @@ export function ReceiptUploadModal() {
   const transactions = useStore((s) => s.transactions);
   const attachReceipt = useStore((s) => s.attachReceipt);
   const saveVat = useStore((s) => s.saveVat);
+  const setPendingVat = useStore((s) => s.setPendingVat);
 
   const txn = modal.txnId
     ? transactions.find((t) => t.id === modal.txnId) ?? null
@@ -125,11 +126,23 @@ export function ReceiptUploadModal() {
       mimeType: stage.mimeType,
       dataUrl: stage.dataUrl,
     });
-    saveVat(txn.id, {
-      rate: stage.detectedRate,
-      amount: stage.detectedAmount,
-      method: 'receipt',
-    });
+    if (modal.source === 'detail') {
+      // Defer commit: stage VAT so the txn stays in "To review" until the
+      // user clicks "Mark as reviewed". RecordedView renders from pending.
+      setPendingVat(txn.id, {
+        kind: 'record',
+        rate: stage.detectedRate,
+        amount: stage.detectedAmount,
+        method: 'receipt',
+      });
+    } else {
+      // Batch flow commits immediately to drive auto-advance.
+      saveVat(txn.id, {
+        rate: stage.detectedRate,
+        amount: stage.detectedAmount,
+        method: 'receipt',
+      });
+    }
     closeReceiptModal();
   };
 
