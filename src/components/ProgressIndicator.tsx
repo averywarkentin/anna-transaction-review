@@ -21,12 +21,18 @@ export function ProgressIndicator({ reviewed, total }: Props) {
   const pct = total === 0 ? 0 : Math.round((reviewed / total) * 100);
   const currentView = useStore((s) => s.currentView);
   const setCurrentView = useStore((s) => s.setCurrentView);
+  const clearFilters = useStore((s) => s.clearFilters);
   const isActive = currentView === 'all-transactions';
 
   return (
     <button
       type="button"
-      onClick={() => setCurrentView('all-transactions')}
+      onClick={() => {
+        // Card reads as "look at the whole ledger" — any chip/date/account
+        // filter would contradict that, so reset them before switching.
+        clearFilters();
+        setCurrentView('all-transactions');
+      }}
       aria-pressed={isActive}
       aria-label="Open all transactions"
       className={`relative flex h-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring ${
