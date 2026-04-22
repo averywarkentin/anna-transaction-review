@@ -343,17 +343,19 @@ export function FilterBar() {
                       onChange={(v) => setPersonalTaxYear(v as TaxYearKey)}
                     />
                     {personalIdsInScope.length > 0 && (
+                      // Mirrors the Needs VAT "Review all N in VAT mode"
+                      // pill: square-with-rounded-corners, accent fill,
+                      // hidden on mobile (bottom-sheet CTA handles that
+                      // width).
                       <button
                         type="button"
                         onClick={() => startYearEnd(personalIdsInScope)}
-                        className="inline-flex items-center gap-1 rounded-full bg-accent px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-accent-hover"
+                        className="hidden items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-accent-hover hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 sm:inline-flex"
                         title="Step through each personal item for corporation tax review (Enter)"
                       >
-                        <ListChecks
-                          className="h-3.5 w-3.5"
-                          aria-hidden="true"
-                        />
-                        Review all ({personalIdsInScope.length})
+                        <ListChecks className="h-4 w-4" aria-hidden="true" />
+                        Review all {personalIdsInScope.length} personal
+                        expense{personalIdsInScope.length === 1 ? '' : 's'}
                       </button>
                     )}
                   </>
