@@ -339,9 +339,13 @@ function MerchantGroupedList({
             key={g.merchant}
             className="border-b border-ink-100 last:border-b-0"
           >
-            <div className="flex items-center gap-4 bg-paper-muted px-6 py-2.5">
+            <div className="flex items-center gap-3 bg-paper-muted px-6 py-2.5">
+              {/* Checkbox column pinned to the same 28px width as the ROW_GRID
+                  first column on the list header and the desktop rows inside
+                  each expanded group, so checkboxes line up vertically across
+                  all three rows. */}
               <div
-                className="flex shrink-0 items-center justify-center"
+                className="flex w-7 shrink-0 items-center justify-center"
                 onClick={(e) => e.stopPropagation()}
               >
                 <input
