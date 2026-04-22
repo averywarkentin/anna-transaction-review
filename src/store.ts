@@ -149,6 +149,16 @@ export type ListView = 'flat' | 'merchant';
 export type TopView = 'to-review' | 'all-transactions';
 
 /**
+ * Staged VAT answer for the inline detail-panel flow. Either captures a
+ * rate + amount the user entered, or records a not-applicable choice. No
+ * receipt-attachment path: that one still commits straight away because
+ * the upload flow itself is the "Save" action.
+ */
+export type PendingVat =
+  | { kind: 'record'; rate: VatRate; amount: number; method: VatEntryMethod }
+  | { kind: 'not-applicable' };
+
+/**
  * A snapshot for undoing the most recent recategorisation action.
  * We snapshot each touched transaction's pre-change state and, if the
  * action created a rule, the rule itself so we can roll it back cleanly.
@@ -265,6 +275,19 @@ type Store = {
    * the pulse.
    */
   recentlyChangedIds: RecentlyChangedEntry[];
+  /**
+   * Staged-but-not-committed VAT answers for the detail panel (inline
+   * flow). The user clicks "Save VAT amount" to capture their input, but
+   * we hold it here rather than mutating the transaction, so the txn stays
+   * in the "To review" inbox until the user explicitly clicks "Mark as
+   * reviewed". Commit runs via `commitPendingVat` (or transparently
+   * through `toggleReviewed`) and flushes the pending record into the
+   * transaction.
+   *
+   * Not used by the batch Reviewing VAT flow — that one commits straight
+   * away because advance-on-save is the whole point of batch mode.
+   */
+  pendingVat: Record<string, PendingVat>;
 
   toggleFilter: (f: FilterKey) => void;
   toggleCategoryFilter: (c: Category) => void;
@@ -344,6 +367,21 @@ type Store = {
   ) => void;
   removeVat: (id: string) => void;
   markNotVatEligible: (id: string) => void;
+  /**
+   * Stage a VAT answer (either recorded amount or not-applicable) for the
+   * detail panel flow. Holds the input in `pendingVat` without touching
+   * the transaction — flushed by `commitPendingVat` or implicitly on
+   * `toggleReviewed`.
+   */
+  setPendingVat: (id: string, pending: PendingVat) => void;
+  /** Discard a staged VAT answer and return the detail panel to entry mode. */
+  clearPendingVat: (id: string) => void;
+  /**
+   * Flush any staged VAT answer for `id` into the transaction and drop
+   * the pending record. No-op when nothing is staged. Used by
+   * `toggleReviewed` and by any explicit commit path.
+   */
+  commitPendingVat: (id: string) => void;
   attachReceipt: (
     id: string,
     args: {
@@ -689,6 +727,7 @@ export const useStore = create<Store>((set, get) => ({
 
   reviewedSession: [],
   recentlyChangedIds: [],
+  pendingVat: {},
 
   toggleFilter: (f) =>
     set((s) => {
@@ -916,6 +955,35 @@ export const useStore = create<Store>((set, get) => ({
         batch: nextBatch,
       };
     }),
+
+  setPendingVat: (id, pending) =>
+    set((s) => ({ pendingVat: { ...s.pendingVat, [id]: pending } })),
+
+  clearPendingVat: (id) =>
+    set((s) => {
+      if (!(id in s.pendingVat)) return {} as Partial<Store>;
+      const next = { ...s.pendingVat };
+      delete next[id];
+      return { pendingVat: next };
+    }),
+
+  commitPendingVat: (id) => {
+    const pending = get().pendingVat[id];
+    if (!pending) return;
+    // Flush through the same committed-state paths the batch flow uses so
+    // everything downstream (reviewedSession, milestones, etc.) stays
+    // consistent regardless of which flow staged the answer.
+    if (pending.kind === 'record') {
+      get().saveVat(id, {
+        rate: pending.rate,
+        amount: pending.amount,
+        method: pending.method,
+      });
+    } else {
+      get().markNotVatEligible(id);
+    }
+    get().clearPendingVat(id);
+  },
 
   // Deliberately touches receipt fields only. Upload must NOT move a txn out
   // of "To review" — only toggleReviewed does that.
@@ -1429,21 +1497,31 @@ export const useStore = create<Store>((set, get) => ({
 
   setRulesModalOpen: (open) => set(() => ({ rulesModalOpen: open })),
 
-  toggleReviewed: (id, reviewed) =>
+  toggleReviewed: (id, reviewed) => {
+    // Flush any staged VAT answer first so the transaction carries the
+    // user's intent the moment it flips to reviewed. Only matters when
+    // transitioning to reviewed=true; un-reviewing is a correction and
+    // shouldn't drag in stale pending state.
+    const curr = get().transactions.find((x) => x.id === id);
+    const next = reviewed ?? !(curr?.reviewed ?? false);
+    if (next && curr && !curr.reviewed) {
+      get().commitPendingVat(id);
+    }
     set((s) => {
       const t = s.transactions.find((x) => x.id === id);
       if (!t) return {};
-      const next = reviewed ?? !t.reviewed;
-      if (t.reviewed === next) return {};
+      const nextReviewed = reviewed ?? !t.reviewed;
+      if (t.reviewed === nextReviewed) return {};
       return {
-        transactions: updateTxn(s.transactions, id, { reviewed: next }),
+        transactions: updateTxn(s.transactions, id, { reviewed: nextReviewed }),
         // Push on transition to reviewed=true only. Un-reviewing is a
         // correction, not a new review event.
-        reviewedSession: next
+        reviewedSession: nextReviewed
           ? pushReviewedSession(s.reviewedSession, [id])
           : s.reviewedSession,
       };
-    }),
+    });
+  },
 
   bulkSetReviewed: (ids, reviewed) =>
     set((s) => {
@@ -1463,7 +1541,13 @@ export const useStore = create<Store>((set, get) => ({
       };
     }),
 
-  markReviewedWithoutReceipt: (ids) =>
+  markReviewedWithoutReceipt: (ids) => {
+    // Flush staged VAT answers (from the inline detail flow) before the
+    // reviewed flag flips, so the transaction carries the user's intent
+    // into its reviewed state instead of losing the staged amount.
+    for (const id of ids) {
+      if (get().pendingVat[id]) get().commitPendingVat(id);
+    }
     set((s) => {
       const targetIds = new Set(ids);
       const newlyReviewed: string[] = [];
@@ -1477,7 +1561,8 @@ export const useStore = create<Store>((set, get) => ({
         checkedIds: new Set<string>(),
         reviewedSession: pushReviewedSession(s.reviewedSession, newlyReviewed),
       };
-    }),
+    });
+  },
 
   setPersonalTaxYear: (key) => set(() => ({ personalTaxYear: key })),
 

@@ -34,12 +34,23 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
   const removeVat = useStore((s) => s.removeVat);
   const markNotVatEligible = useStore((s) => s.markNotVatEligible);
   const openReceiptModal = useStore((s) => s.openReceiptModal);
+  const pending = useStore((s) => s.pendingVat[txn.id]);
+  const setPendingVat = useStore((s) => s.setPendingVat);
+  const clearPendingVat = useStore((s) => s.clearPendingVat);
+
+  const isInline = variant === 'inline';
 
   // If vatStatus is 'recorded' and user clicks Edit, we drop into entry mode
   const [editing, setEditing] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const timerRef = useRef<number | null>(null);
   const lastSeenEnteredAt = useRef<string | undefined>(txn.vatEnteredAt);
+  // Track the pending answer we last showed a flash for, so flipping
+  // between answers (e.g. 20% → 5%) re-fires the Saved tint without
+  // needing a pending → undefined → pending roundtrip.
+  const lastSeenPendingKey = useRef<string | null>(
+    pending ? pendingKey(pending) : null,
+  );
 
   useEffect(
     () => () => {
@@ -48,9 +59,11 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
     [],
   );
 
-  // Watch for VAT being recorded (either via inline save or external receipt flow).
-  // Fires the brief "VAT added" confirmation and the onSaved callback uniformly.
+  // Batch flow (variant='expanded'): commit happens immediately via
+  // saveVat, so we key the "Saved" flash + auto-advance off the
+  // transaction's vatEnteredAt.
   useEffect(() => {
+    if (isInline) return;
     if (
       txn.vatEnteredAt &&
       txn.vatEnteredAt !== lastSeenEnteredAt.current &&
@@ -59,67 +72,145 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
       setEditing(false);
       setConfirm(true);
       if (timerRef.current) window.clearTimeout(timerRef.current);
-      // Batch mode wants to auto-advance quickly (600ms feels snappy in a
-      // rhythm). Inline detail on desktop wants a beat longer so the user
-      // definitely clocks the Saved state before it reverts.
-      const delay = onSaved ? 600 : 1200;
+      // Batch mode wants to auto-advance quickly (600ms feels snappy in
+      // the rhythm of the queue).
       timerRef.current = window.setTimeout(() => {
         setConfirm(false);
         onSaved?.();
-      }, delay);
+      }, 600);
     }
     lastSeenEnteredAt.current = txn.vatEnteredAt;
-  }, [txn.vatEnteredAt, txn.vatStatus, onSaved]);
+  }, [txn.vatEnteredAt, txn.vatStatus, onSaved, isInline]);
 
-  const shouldShowEntry = txn.vatStatus === 'needs-vat' || editing;
+  // Inline (detail-panel) flow: nothing is committed until the user
+  // clicks "Mark as reviewed" in DetailFooter, so the Saved tint is
+  // driven by `pendingVat` transitions instead. We hold the flash until
+  // the user moves on; clearing is via Edit / Remove or a fresh save.
+  useEffect(() => {
+    if (!isInline) return;
+    const key = pending ? pendingKey(pending) : null;
+    if (key && key !== lastSeenPendingKey.current) {
+      setEditing(false);
+      setConfirm(true);
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => setConfirm(false), 1200);
+    }
+    lastSeenPendingKey.current = key;
+  }, [pending, isInline]);
+
+  // Resolve the view based on pending answer (inline) or the transaction
+  // itself (batch / already-committed inline state).
+  const effectiveStatus: 'needs-vat' | 'recorded' | 'not-applicable' =
+    isInline && pending
+      ? pending.kind === 'record'
+        ? 'recorded'
+        : 'not-applicable'
+      : txn.vatStatus;
+
+  // When a pending record is staged, present the RecordedView as though
+  // the txn itself had those values — the summary block is the point of
+  // the feedback and shouldn't look different from the committed state.
+  const displayTxn =
+    isInline && pending?.kind === 'record'
+      ? {
+          ...txn,
+          vatRate: pending.rate,
+          vatAmount: pending.amount,
+          vatEntryMethod: pending.method,
+        }
+      : txn;
+
+  const shouldShowEntry = effectiveStatus === 'needs-vat' || editing;
+
+  const clearStagedOrCommitted = () => {
+    if (isInline && pending) {
+      clearPendingVat(txn.id);
+    } else if (txn.vatStatus !== 'needs-vat') {
+      removeVat(txn.id);
+    }
+  };
 
   return (
     <section className="space-y-2.5">
       <SectionHeading>VAT</SectionHeading>
 
-      {txn.vatStatus === 'not-applicable' && !editing && (
+      {effectiveStatus === 'not-applicable' && !editing && (
         <NotApplicableView
           txn={txn}
           variant={variant}
           onToggleEligible={() => {
-            removeVat(txn.id);
+            clearStagedOrCommitted();
             setEditing(true);
           }}
           onSaveAndNext={onSaved}
         />
       )}
 
-      {txn.vatStatus === 'recorded' && !editing && (
+      {effectiveStatus === 'recorded' && !editing && (
         <RecordedView
-          txn={txn}
+          txn={displayTxn}
           justSaved={confirm}
-          onEdit={() => setEditing(true)}
-          onRemove={() => removeVat(txn.id)}
+          onEdit={() => {
+            // Drop the staged answer before re-opening the form so the
+            // EntryView defaults back to the transaction's real state
+            // rather than leaving a ghost.
+            if (isInline && pending) clearPendingVat(txn.id);
+            setEditing(true);
+          }}
+          onRemove={clearStagedOrCommitted}
         />
       )}
 
-      {shouldShowEntry && txn.vatStatus !== 'not-applicable' && (
+      {shouldShowEntry && effectiveStatus !== 'not-applicable' && (
         <EntryView
           key={txn.id}
           txn={txn}
           variant={variant}
           onCancel={editing ? () => setEditing(false) : undefined}
           onSave={(input) => {
-            // The effect on vatEnteredAt handles the "VAT added" confirmation
-            // and onSaved advance, so both inline and receipt-modal saves
-            // behave identically. We only need to close the entry form here.
-            saveVat(txn.id, input);
+            if (isInline) {
+              // Stage rather than commit. DetailFooter's "Mark as
+              // reviewed" will flush pending → txn via commitPendingVat.
+              setPendingVat(txn.id, {
+                kind: 'record',
+                rate: input.rate,
+                amount: input.amount,
+                method: input.method,
+              });
+            } else {
+              saveVat(txn.id, input);
+            }
             setEditing(false);
           }}
-          onRequestUpload={() => openReceiptModal(txn.id, variant === 'expanded' ? 'batch' : 'detail')}
+          onRequestUpload={() =>
+            openReceiptModal(txn.id, variant === 'expanded' ? 'batch' : 'detail')
+          }
           onMarkNotEligible={() => {
-            markNotVatEligible(txn.id);
+            if (isInline) {
+              setPendingVat(txn.id, { kind: 'not-applicable' });
+            } else {
+              markNotVatEligible(txn.id);
+            }
             setEditing(false);
           }}
         />
       )}
     </section>
   );
+}
+
+/**
+ * Stable key for a pending VAT answer. Lets the inline "Saved" flash
+ * effect re-trigger when the user edits and re-saves with a different
+ * rate or amount without having to reach for a timestamp.
+ */
+function pendingKey(
+  p:
+    | { kind: 'record'; rate: VatRate; amount: number; method: VatEntryMethod }
+    | { kind: 'not-applicable' },
+): string {
+  if (p.kind === 'not-applicable') return 'nae';
+  return `rec:${p.rate}:${p.amount}:${p.method}`;
 }
 
 function SectionHeading({ children }: { children: string }) {
