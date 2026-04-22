@@ -98,7 +98,7 @@ export function ReceiptRequiredModal({
         className="flex h-full w-full flex-col overflow-hidden bg-paper shadow-[0_12px_48px_-8px_rgba(15,23,42,0.25)] sm:h-auto sm:max-w-[480px] sm:rounded-xl"
       >
         <div className="flex items-start justify-between gap-4 border-b border-ink-100 px-5 py-4">
-          <div className="flex min-w-0 items-start gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-amber-50 text-amber-700">
               <AlertTriangle className="h-4 w-4" aria-hidden="true" />
             </div>
