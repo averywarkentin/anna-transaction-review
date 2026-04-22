@@ -393,16 +393,6 @@ function DropzoneStage({
           if (file) onFile(file);
         }}
       />
-      <p className="mt-3 text-center text-[11.5px] text-ink-400">
-        No receipt to hand?{' '}
-        <button
-          type="button"
-          onClick={onClickZone}
-          className="font-medium text-ink-500 underline underline-offset-2 hover:text-ink-800"
-        >
-          Try the demo flow with a stub image
-        </button>
-      </p>
     </div>
   );
 }
