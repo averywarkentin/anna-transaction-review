@@ -288,6 +288,15 @@ type Store = {
    * away because advance-on-save is the whole point of batch mode.
    */
   pendingVat: Record<string, PendingVat>;
+  /**
+   * Staged-but-not-committed business/personal toggle for the detail
+   * panel. Same rationale as pendingVat: flipping expense type would
+   * otherwise move the row out of the Personal-expenses-to-review list
+   * the moment the user toggled. Holds the user's choice until
+   * `toggleReviewed` (or an explicit commit) flushes it. Absence means
+   * the transaction still reflects its committed isPersonal.
+   */
+  pendingExpenseType: Record<string, 'business' | 'personal'>;
 
   toggleFilter: (f: FilterKey) => void;
   toggleCategoryFilter: (c: Category) => void;
@@ -382,6 +391,20 @@ type Store = {
    * `toggleReviewed` and by any explicit commit path.
    */
   commitPendingVat: (id: string) => void;
+  /** Stage a business/personal flip without mutating the transaction. */
+  setPendingExpenseType: (
+    id: string,
+    next: 'business' | 'personal',
+  ) => void;
+  /** Discard a staged expense-type flip. */
+  clearPendingExpenseType: (id: string) => void;
+  /**
+   * Flush a staged expense-type flip into the transaction via
+   * `markPersonal` / `markBusiness` so all downstream invariants hold.
+   * No-op if nothing is staged or the staged value already matches the
+   * transaction's committed state.
+   */
+  commitPendingExpenseType: (id: string) => void;
   attachReceipt: (
     id: string,
     args: {
@@ -728,6 +751,7 @@ export const useStore = create<Store>((set, get) => ({
   reviewedSession: [],
   recentlyChangedIds: [],
   pendingVat: {},
+  pendingExpenseType: {},
 
   toggleFilter: (f) =>
     set((s) => {
@@ -983,6 +1007,34 @@ export const useStore = create<Store>((set, get) => ({
       get().markNotVatEligible(id);
     }
     get().clearPendingVat(id);
+  },
+
+  setPendingExpenseType: (id, next) =>
+    set((s) => ({
+      pendingExpenseType: { ...s.pendingExpenseType, [id]: next },
+    })),
+
+  clearPendingExpenseType: (id) =>
+    set((s) => {
+      if (!(id in s.pendingExpenseType)) return {} as Partial<Store>;
+      const nextMap = { ...s.pendingExpenseType };
+      delete nextMap[id];
+      return { pendingExpenseType: nextMap };
+    }),
+
+  commitPendingExpenseType: (id) => {
+    const pending = get().pendingExpenseType[id];
+    if (!pending) return;
+    const txn = get().transactions.find((t) => t.id === id);
+    if (txn) {
+      const currentlyPersonal = txn.isPersonal;
+      if (pending === 'personal' && !currentlyPersonal) {
+        get().markPersonal(id);
+      } else if (pending === 'business' && currentlyPersonal) {
+        get().markBusiness(id);
+      }
+    }
+    get().clearPendingExpenseType(id);
   },
 
   // Deliberately touches receipt fields only. Upload must NOT move a txn out
@@ -1506,6 +1558,7 @@ export const useStore = create<Store>((set, get) => ({
     const next = reviewed ?? !(curr?.reviewed ?? false);
     if (next && curr && !curr.reviewed) {
       get().commitPendingVat(id);
+      get().commitPendingExpenseType(id);
     }
     set((s) => {
       const t = s.transactions.find((x) => x.id === id);
@@ -1547,6 +1600,7 @@ export const useStore = create<Store>((set, get) => ({
     // into its reviewed state instead of losing the staged amount.
     for (const id of ids) {
       if (get().pendingVat[id]) get().commitPendingVat(id);
+      if (get().pendingExpenseType[id]) get().commitPendingExpenseType(id);
     }
     set((s) => {
       const targetIds = new Set(ids);

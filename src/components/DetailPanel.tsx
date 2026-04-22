@@ -611,10 +611,13 @@ function ReceiptDropZone({
 }
 
 function PersonalBlock({ txn }: { txn: Transaction }) {
-  const markPersonal = useStore((s) => s.markPersonal);
-  const markBusiness = useStore((s) => s.markBusiness);
   const setPersonalReason = useStore((s) => s.setPersonalReason);
   const setReviewedForCorpTax = useStore((s) => s.setReviewedForCorpTax);
+  const pendingExpenseType = useStore(
+    (s) => s.pendingExpenseType[txn.id],
+  );
+  const setPendingExpenseType = useStore((s) => s.setPendingExpenseType);
+  const clearPendingExpenseType = useStore((s) => s.clearPendingExpenseType);
 
   const existingReason = txn.personalExpenseNote?.reason ?? '';
   const [reasonDraft, setReasonDraft] = useState(existingReason);
@@ -626,10 +629,21 @@ function PersonalBlock({ txn }: { txn: Transaction }) {
   }, [txn.id, existingReason]);
 
   const reviewed = txn.personalExpenseNote?.reviewedForCorpTax ?? false;
+  const committed: 'business' | 'personal' = txn.isPersonal
+    ? 'personal'
+    : 'business';
+  // Effective selection = staged pending if any, else committed. Keeps
+  // the toggle responsive while the row stays put in "To review" until
+  // the user hits Mark as reviewed.
+  const selected: 'business' | 'personal' = pendingExpenseType ?? committed;
 
   const handleSelect = (next: 'business' | 'personal') => {
-    if (next === 'personal' && !txn.isPersonal) markPersonal(txn.id);
-    else if (next === 'business' && txn.isPersonal) markBusiness(txn.id);
+    if (next === committed) {
+      // Re-selecting the committed value drops any pending flip.
+      if (pendingExpenseType) clearPendingExpenseType(txn.id);
+      return;
+    }
+    setPendingExpenseType(txn.id, next);
   };
 
   const handleReasonBlur = () => {
@@ -637,8 +651,6 @@ function PersonalBlock({ txn }: { txn: Transaction }) {
       setPersonalReason(txn.id, reasonDraft);
     }
   };
-
-  const selected: 'business' | 'personal' = txn.isPersonal ? 'personal' : 'business';
 
   return (
     <section className="space-y-2.5">
@@ -670,7 +682,7 @@ function PersonalBlock({ txn }: { txn: Transaction }) {
         })}
       </div>
 
-      {txn.isPersonal && (
+      {selected === 'personal' && (
         <div className="space-y-3 rounded-lg border border-ink-100 bg-paper px-3.5 py-3">
           <p className="text-[12px] leading-snug text-ink-500">
             Personal expenses are excluded from your corporation tax calculations.
