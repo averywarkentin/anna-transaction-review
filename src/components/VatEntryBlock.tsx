@@ -597,7 +597,11 @@ function VatRateTooltip() {
           role="tooltip"
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
-          className="absolute left-1/2 top-full z-30 mt-2 w-[280px] -translate-x-1/2 rounded-lg border border-ink-100 bg-paper p-3 text-[12px] leading-snug text-ink-700 shadow-panel"
+          // Anchor the tooltip to the button's left edge and grow rightward.
+          // The old centred-over-button positioning clipped on the left inside
+          // the detail panel because the Rate label sits close to the panel's
+          // left edge. Width is capped to the viewport so mobile still fits.
+          className="absolute left-0 top-full z-30 mt-2 w-[280px] max-w-[calc(100vw-2rem)] rounded-lg border border-ink-100 bg-paper p-3 text-[12px] leading-snug text-ink-700 shadow-panel"
         >
           <p>
             20% is the standard UK VAT rate and applies to most business
