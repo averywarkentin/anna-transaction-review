@@ -13,7 +13,6 @@ import { useStore } from '../store';
 import { formatAmount, formatDateLong, formatDateShort } from '../lib/format';
 import { ConfidenceDot } from './ConfidenceDot';
 import { VatEntryBlock } from './VatEntryBlock';
-import { RecentlyReviewedPopover } from './RecentlyReviewedPopover';
 import type { Transaction } from '../types';
 
 export function BatchReviewMode() {
@@ -172,9 +171,11 @@ function BatchHeader() {
       </div>
 
       <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:min-w-[260px] sm:gap-3">
-        <div className="hidden sm:block">
-          <RecentlyReviewedPopover source="batch" />
-        </div>
+        {/* Recently reviewed popover deliberately omitted from this header.
+            The batch sidebar already answers "what have I just reviewed?"
+            with live ticks + the crossed-out amounts, so the popover
+            would duplicate information. Kept on the detail panel header
+            where the list is further away. */}
         <div className="hidden flex-col items-end leading-tight sm:flex">
           <span className="tabular text-[12px] font-medium text-ink-700">
             {completed} of {total} done
