@@ -625,7 +625,7 @@ function ConfidenceLegend() {
               </span>
             </li>
             <li className="flex items-start gap-2">
-              <span className="mt-1 inline-block h-2 w-2 shrink-0 animate-pulse-soft rounded-full bg-amber-500" aria-hidden="true" />
+              <span className="mt-1 inline-block h-2 w-2 shrink-0 animate-pulse-soft rounded-full bg-red-500" aria-hidden="true" />
               <span>
                 <span className="font-medium text-ink-800">Low.</span>{' '}
                 AI isn't sure — please pick one.
