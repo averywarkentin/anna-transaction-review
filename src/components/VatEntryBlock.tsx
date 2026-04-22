@@ -166,7 +166,9 @@ export function VatEntryBlock({ txn, onSaved, variant = 'inline' }: Props) {
           key={txn.id}
           txn={txn}
           variant={variant}
-          onCancel={editing ? () => setEditing(false) : undefined}
+          onCancel={
+            editing && !isInline ? () => setEditing(false) : undefined
+          }
           onSave={(input) => {
             if (isInline) {
               // Stage rather than commit. DetailFooter's "Mark as
