@@ -18,7 +18,7 @@ export function ConfidenceDot({ level, className = '' }: Props) {
       ? 'bg-emerald-500'
       : level === 'medium'
       ? 'bg-amber-500'
-      : 'bg-amber-500 animate-pulse-soft';
+      : 'bg-red-500 animate-pulse-soft';
   return (
     <span
       className={`${base} ${colour} ${className}`}

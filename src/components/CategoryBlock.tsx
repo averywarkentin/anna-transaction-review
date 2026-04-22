@@ -611,18 +611,18 @@ function AiSuggestionCard({
   onEdit: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5">
+    <div className="rounded-lg border border-red-200 bg-red-50 p-3.5">
       <div className="flex items-start gap-2">
         <Sparkles
-          className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+          className="mt-0.5 h-4 w-4 shrink-0 text-red-600"
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <div className="text-[12.5px] font-semibold text-amber-800">
+          <div className="text-[12.5px] font-semibold text-red-800">
             AI suggested: {suggested}
           </div>
           {reasoning && (
-            <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800/90">
+            <p className="mt-1 text-[12.5px] leading-relaxed text-red-800/90">
               {reasoning}
             </p>
           )}
@@ -630,7 +630,7 @@ function AiSuggestionCard({
             <button
               type="button"
               onClick={onAccept}
-              className="inline-flex items-center gap-1 rounded-md bg-amber-700 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-amber-800"
+              className="inline-flex items-center gap-1 rounded-md bg-red-700 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-red-800"
             >
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
               Accept suggestion
@@ -638,7 +638,7 @@ function AiSuggestionCard({
             <button
               type="button"
               onClick={onEdit}
-              className="inline-flex items-center rounded-md border border-amber-300 bg-paper px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100"
+              className="inline-flex items-center rounded-md border border-red-300 bg-paper px-2.5 py-1 text-[12px] font-medium text-red-800 hover:bg-red-100"
             >
               Choose different
             </button>
