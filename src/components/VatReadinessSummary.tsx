@@ -8,9 +8,12 @@ const TODAY = new Date('2026-04-18T12:00:00Z');
 
 export function VatReadinessSummary() {
   const transactions = useStore((s) => s.transactions);
-  const startBatch = useStore((s) => s.startBatch);
+  const activeFilters = useStore((s) => s.activeFilters);
+  const currentView = useStore((s) => s.currentView);
+  const setCurrentView = useStore((s) => s.setCurrentView);
+  const toggleFilter = useStore((s) => s.toggleFilter);
 
-  const { ready, total, needsVat, needsVatIds, daysToEnd } = useMemo(() => {
+  const { ready, total, needsVat, daysToEnd } = useMemo(() => {
     // "Eligible" = VAT-eligible category, debit, current VAT quarter.
     // The "Needs VAT" chip filter uses the exact same scope, so the
     // chip count and "N transactions still need VAT" always match.
@@ -18,17 +21,13 @@ export function VatReadinessSummary() {
     const ready = eligible.filter((t) => t.vatStatus === 'recorded').length;
     const needsVatList = eligible.filter((t) => t.vatStatus === 'needs-vat');
     const needsVat = needsVatList.length;
-    const needsVatIds = needsVatList
-      .slice()
-      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-      .map((t) => t.id);
     const total = ready + needsVat;
     const { end } = currentVatQuarterBounds();
     const daysToEnd = Math.max(
       0,
       Math.ceil((end.getTime() - TODAY.getTime()) / 86_400_000),
     );
-    return { ready, total, needsVat, needsVatIds, daysToEnd };
+    return { ready, total, needsVat, daysToEnd };
   }, [transactions]);
 
   // ready % = recorded / (recorded + needs-vat) × 100. "Not applicable" is
@@ -36,16 +35,34 @@ export function VatReadinessSummary() {
   const pct = total === 0 ? 100 : Math.round((ready / total) * 100);
   const showDeadline = daysToEnd <= 30;
   const urgent = daysToEnd <= 7;
+  const isActive =
+    currentView === 'to-review' && activeFilters.has('needs-vat');
+
+  const onActivate = () => {
+    // One click → "To review" + Needs VAT chip on. Mirrors the All
+    // transactions card: the card is a shortcut into the filtered list
+    // its number is counting. Toggle off if already pinned to it.
+    if (isActive) {
+      toggleFilter('needs-vat');
+      return;
+    }
+    if (currentView !== 'to-review') setCurrentView('to-review');
+    if (!activeFilters.has('needs-vat')) toggleFilter('needs-vat');
+  };
 
   return (
-    <div
-      className={`relative flex h-full items-center gap-2.5 rounded-lg border px-3 py-1.5 transition ${
-        urgent
-          ? 'border-amber-200 bg-amber-50'
-          : 'border-ink-100 bg-paper-muted'
+    <button
+      type="button"
+      onClick={onActivate}
+      aria-pressed={isActive}
+      aria-label={`VAT return ${pct}% ready, ${needsVat} still need VAT. Open Needs VAT list.`}
+      className={`relative flex h-full items-center gap-2.5 rounded-lg border px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring ${
+        isActive
+          ? 'border-accent bg-accent-soft/60'
+          : urgent
+            ? 'border-amber-200 bg-amber-50 hover:border-amber-300'
+            : 'border-ink-100 bg-paper-muted hover:border-ink-200 hover:bg-ink-50/60'
       }`}
-      role="group"
-      aria-label="VAT return readiness"
     >
       <div
         className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${
@@ -64,27 +81,10 @@ export function VatReadinessSummary() {
           </span>
           <span>ready</span>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            // Drop straight into the Reviewing VAT batch flow so a
-            // single click takes the user from "12% ready" to the first
-            // transaction that still needs a number on it. No batch
-            // starts if nothing is outstanding.
-            if (needsVatIds.length === 0) return;
-            startBatch(needsVatIds);
-          }}
-          disabled={needsVat === 0}
-          aria-label={
-            needsVat === 0
-              ? 'No transactions still need VAT'
-              : `Review ${needsVat} transaction${needsVat === 1 ? '' : 's'} still needing VAT`
-          }
-          className="truncate text-left text-[11.5px] text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline disabled:cursor-default disabled:no-underline disabled:hover:text-ink-500"
-        >
+        <div className="truncate text-[11.5px] text-ink-500">
           <AnimatedNumber value={needsVat} /> transaction
           {needsVat === 1 ? '' : 's'} still need VAT
-        </button>
+        </div>
         {showDeadline ? (
           <div
             className={`flex items-center gap-1 text-[11px] ${
@@ -115,6 +115,6 @@ export function VatReadinessSummary() {
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
